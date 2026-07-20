@@ -1,16 +1,9 @@
-"""
-This namespace represents low-level functionality not intended for daily use,
-but useful for extending Trio's functionality.
-"""
 
-# imports are renamed with leading underscores to indicate they are not part of the public API
 import select as _select
 
-# static checkers don't understand if importing this as _sys, so it's deleted later
 import sys
 import typing as _t
 
-# Generally available symbols
 from ._core import (
     Abort as Abort,
     ParkingLot as ParkingLot,
@@ -54,15 +47,11 @@ from ._core import (
 )
 from ._subprocess import open_process as open_process
 
-# This is the union of a subset of trio/_core/ and some things from trio/*.py.
-# See comments in trio/__init__.py for details.
 
-# Uses `from x import y as y` for compatibility with `pyright --verifytypes` (#2625)
 
 if sys.platform == "win32" or (
     not _t.TYPE_CHECKING and "sphinx.ext.autodoc" in sys.modules
 ):
-    # Windows symbols
     from ._core import (
         current_iocp as current_iocp,
         monitor_completion_key as monitor_completion_key,
@@ -72,17 +61,14 @@ if sys.platform == "win32" or (
         write_overlapped as write_overlapped,
     )
 
-    # don't let documentation import the actual implementation
     if sys.platform == "win32":  # pragma: no branch
         from ._wait_for_object import WaitForSingleObject as WaitForSingleObject
 
 if sys.platform != "win32" or (
     not _t.TYPE_CHECKING and "sphinx.ext.autodoc" in sys.modules
 ):
-    # Unix symbols
     from ._unix_pipes import FdStream as FdStream
 
-    # Kqueue-specific symbols
     if (
         sys.platform != "linux" and (_t.TYPE_CHECKING or not hasattr(_select, "epoll"))
     ) or (not _t.TYPE_CHECKING and "sphinx.ext.autodoc" in sys.modules):

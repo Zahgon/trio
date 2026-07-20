@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, TypeVar
 
 from .._abc import Instrument
 
-# Used to log exceptions in instruments
 INSTRUMENT_LOGGER = logging.getLogger("trio.abc.Instrument")
 
 if TYPE_CHECKING:
@@ -16,21 +15,9 @@ if TYPE_CHECKING:
     T = TypeVar("T")
 
 
-# Decorator to mark methods public. This does nothing by itself, but
-# trio/_tools/gen_exports.py looks for it.
-def _public(fn: T) -> T:
-    return fn
 
 
 class Instruments(UserDict[str, dict[Instrument, None]]):
-    """A collection of `trio.abc.Instrument` organized by hook.
-
-    Instrumentation calls are rather expensive, and we don't want a
-    rarely-used instrument (like before_run()) to slow down hot
-    operations (like before_task_step()). Thus, we cache the set of
-    instruments to be called for each hook, and skip the instrumentation
-    call if there's nothing currently installed for that hook.
-    """
 
     __slots__ = ()
 
@@ -62,7 +49,6 @@ class Instruments(UserDict[str, dict[Instrument, None]]):
                     continue
                 impl = getattr(instrument, name)
                 if isinstance(impl, types.MethodType) and impl.__func__ is prototype:
-                    # Inherited unchanged from _abc.Instrument
                     continue
                 self.data.setdefault(name, {})[instrument] = None
         except:
@@ -83,7 +69,6 @@ class Instruments(UserDict[str, dict[Instrument, None]]):
               deactivated.
 
         """
-        # If instrument isn't present, the KeyError propagates out
         self.data["_all"].pop(instrument)
         for hookname, instruments in list(self.data.items()):
             if instrument in instruments:

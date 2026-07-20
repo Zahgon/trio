@@ -1,11 +1,3 @@
-"""Translates Mypy's output into GitHub's error/warning annotation syntax.
-
-See: https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
-
-This first is run with Mypy's output piped in, to collect messages in
-mypy_annotate.dat. After all platforms run, we run this again, which prints the
-messages in GitHub's format but with cross-platform failures deduplicated.
-"""
 
 from __future__ import annotations
 
@@ -16,7 +8,6 @@ import sys
 
 import attrs
 
-# Example: 'package/filename.py:42:1:46:3: error: Type error here [code]'
 report_re = re.compile(
     r"""
     ([^:]+):  # Filename (anything but ":")
@@ -39,7 +30,6 @@ mypy_to_github = {
 
 @attrs.frozen(kw_only=True)
 class Result:
-    """Accumulated results, used as a dict key to deduplicate."""
 
     filename: str
     start_line: int
@@ -102,11 +92,9 @@ def main(argv: list[str]) -> None:
         with open(cmd_line.dumpfile, "rb") as f:
             results = pickle.load(f)
     except (FileNotFoundError, pickle.UnpicklingError):
-        # If we fail to load, assume it's an old result.
         results = {}
 
     if cmd_line.platform is None:
-        # Write out the results.
         export(results)
     else:
         platform: str = cmd_line.platform

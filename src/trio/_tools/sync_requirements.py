@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-"""Sync Requirements - Automatically upgrade test requirements pinned
-versions from pre-commit config file."""
 
 from __future__ import annotations
 
@@ -50,12 +48,10 @@ def update_requirements(
 
     with requirements.open("w", encoding="utf-8") as file:
         for line in old_lines:
-            # If comment or not version mark line, ignore.
             if line.startswith("#") or "==" not in line:
                 file.write(line)
                 continue
             name, rest = line.split("==", 1)
-            # Maintain extra markers if they exist
             old_version = rest.strip()
             extra = "\n"
             if ";" in rest:
@@ -63,11 +59,9 @@ def update_requirements(
                 old_version = old_version.strip()
                 extra = " ;" + extra
             version = version_data.get(name)
-            # If does not exist, skip
             if version is None:
                 file.write(line)
                 continue
-            # Otherwise might have changed
             new_line = f"{name}=={version}{extra}"
             if new_line != line:
                 if not changed:
@@ -81,15 +75,12 @@ def update_requirements(
 if __name__ == "__main__":
     source_root = Path.cwd().absolute()
 
-    # Double-check we found the right directory
     assert (source_root / "LICENSE").exists()
     pre_commit = source_root / ".pre-commit-config.yaml"
     test_requirements = source_root / "test-requirements.txt"
 
     pre_commit_text = pre_commit.read_text(encoding="utf-8")
 
-    # Get tool versions from pre-commit
-    # Get correct names
     pre_commit_versions = {
         name.removesuffix("-mirror").removesuffix("-pre-commit"): version
         for name, version in yield_pre_commit_version_data(pre_commit_text)

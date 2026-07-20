@@ -37,22 +37,12 @@ else:
         category: type[Warning] | None = DeprecationWarning,
         stacklevel: int = 1,
     ) -> Callable[[T], T]:
-        def wrapper(f: T) -> T:
-            return f
 
         return wrapper
 
 
 @attrs.frozen
 class EventStatistics:
-    """An object containing debugging information.
-
-    Currently the following fields are defined:
-
-    * ``tasks_waiting``: The number of tasks blocked on this event's
-      :meth:`trio.Event.wait` method.
-
-    """
 
     tasks_waiting: int
 
@@ -60,30 +50,6 @@ class EventStatistics:
 @final
 @attrs.define(repr=False, eq=False)
 class Event:
-    """A waitable boolean value useful for inter-task synchronization,
-    inspired by :class:`threading.Event`.
-
-    An event object has an internal boolean flag, representing whether
-    the event has happened yet. The flag is initially False, and the
-    :meth:`wait` method waits until the flag is True. If the flag is
-    already True, then :meth:`wait` returns immediately. (If the event has
-    already happened, there's nothing to wait for.) The :meth:`set` method
-    sets the flag to True, and wakes up any waiters.
-
-    This behavior is useful because it helps avoid race conditions and
-    lost wakeups: it doesn't matter whether :meth:`set` gets called just
-    before or after :meth:`wait`. If you want a lower-level wakeup
-    primitive that doesn't have this protection, consider :class:`Condition`
-    or :class:`trio.lowlevel.ParkingLot`.
-
-    .. note:: Unlike `threading.Event`, `trio.Event` has no
-       `~threading.Event.clear` method. In Trio, once an `Event` has happened,
-       it cannot un-happen. If you need to represent a series of events,
-       consider creating a new `Event` object for each one (they're cheap!),
-       or other synchronization methods like :ref:`channels <channels>` or
-       `trio.lowlevel.ParkingLot`.
-
-    """
 
     _tasks: set[Task] = attrs.field(factory=set, init=False)
     _flag: bool = attrs.field(default=False, init=False)
@@ -94,12 +60,7 @@ class Event:
 
     @enable_ki_protection
     def set(self) -> None:
-        """Set the internal flag value to True, and wake any waiting tasks."""
-        if not self._flag:
-            self._flag = True
-            for task in self._tasks:
-                _core.reschedule(task)
-            self._tasks.clear()
+        pass
 
     async def wait(self) -> None:
         """Block until the internal flag value becomes True.
@@ -113,9 +74,6 @@ class Event:
             task = _core.current_task()
             self._tasks.add(task)
 
-            def abort_fn(_: RaiseCancelT) -> Abort:
-                self._tasks.remove(task)
-                return _core.Abort.SUCCEEDED
 
             await _core.wait_task_rescheduled(abort_fn)
 
@@ -146,7 +104,6 @@ class Event:
 
 
 class _HasAcquireRelease(Protocol):
-    """Only classes with acquire() and release() can use the mixin's implementations."""
 
     async def acquire(self) -> object: ...
 
@@ -170,22 +127,6 @@ class AsyncContextManagerMixin:
 
 @attrs.frozen
 class CapacityLimiterStatistics:
-    """An object containing debugging information.
-
-    Currently the following fields are defined:
-
-    * ``borrowed_tokens``: The number of tokens currently borrowed from
-      the sack.
-    * ``total_tokens``: The total number of tokens in the sack. Usually
-      this will be larger than ``borrowed_tokens``, but it's possibly for
-      it to be smaller if :attr:`trio.CapacityLimiter.total_tokens` was recently decreased.
-    * ``borrowers``: A list of all tasks or other entities that currently
-      hold a token.
-    * ``tasks_waiting``: The number of tasks blocked on this
-      :class:`CapacityLimiter`\'s :meth:`trio.CapacityLimiter.acquire` or
-      :meth:`trio.CapacityLimiter.acquire_on_behalf_of` methods.
-
-    """
 
     borrowed_tokens: int
     total_tokens: int | float
@@ -193,71 +134,13 @@ class CapacityLimiterStatistics:
     tasks_waiting: int
 
 
-# Can be a generic type with a default of Task if/when PEP 696 is released
-# and implemented in type checkers. Making it fully generic would currently
-# introduce a lot of unnecessary hassle.
 @final
 class CapacityLimiter(AsyncContextManagerMixin):
-    """An object for controlling access to a resource with limited capacity.
 
-    Sometimes you need to put a limit on how many tasks can do something at
-    the same time. For example, you might want to use some threads to run
-    multiple blocking I/O operations in parallel... but if you use too many
-    threads at once, then your system can become overloaded and it'll actually
-    make things slower. One popular solution is to impose a policy like "run
-    up to 40 threads at the same time, but no more". But how do you implement
-    a policy like this?
-
-    That's what :class:`CapacityLimiter` is for. You can think of a
-    :class:`CapacityLimiter` object as a sack that starts out holding some fixed
-    number of tokens::
-
-       limit = trio.CapacityLimiter(40)
-
-    Then tasks can come along and borrow a token out of the sack::
-
-       # Borrow a token:
-       async with limit:
-           # We are holding a token!
-           await perform_expensive_operation()
-       # Exiting the 'async with' block puts the token back into the sack
-
-    And crucially, if you try to borrow a token but the sack is empty, then
-    you have to wait for another task to finish what it's doing and put its
-    token back first before you can take it and continue.
-
-    Another way to think of it: a :class:`CapacityLimiter` is like a sofa with a
-    fixed number of seats, and if they're all taken then you have to wait for
-    someone to get up before you can sit down.
-
-    By default, :func:`trio.to_thread.run_sync` uses a
-    :class:`CapacityLimiter` to limit the number of threads running at once;
-    see `trio.to_thread.current_default_thread_limiter` for details.
-
-    If you're familiar with semaphores, then you can think of this as a
-    restricted semaphore that's specialized for one common use case, with
-    additional error checking. For a more traditional semaphore, see
-    :class:`Semaphore`.
-
-    .. note::
-
-       Don't confuse this with the `"leaky bucket"
-       <https://en.wikipedia.org/wiki/Leaky_bucket>`__ or `"token bucket"
-       <https://en.wikipedia.org/wiki/Token_bucket>`__ algorithms used to
-       limit bandwidth usage on networks. The basic idea of using tokens to
-       track a resource limit is similar, but this is a very simple sack where
-       tokens aren't automatically created or destroyed over time; they're
-       just borrowed and then put back.
-
-    """
-
-    # total_tokens would ideally be int|Literal[math.inf] - but that's not valid typing
     def __init__(self, total_tokens: int | float) -> None:  # noqa: PYI041
         self._lot = ParkingLot()
         self._borrowers: set[Task | object] = set()
-        # Maps tasks attempting to acquire -> borrower, to handle on-behalf-of
         self._pending_borrowers: dict[Task, Task | object] = {}
-        # invoke the property setter for validation
         self.total_tokens: int | float = total_tokens
         assert self._total_tokens == total_tokens
 
@@ -266,27 +149,8 @@ class CapacityLimiter(AsyncContextManagerMixin):
 
     @property
     def total_tokens(self) -> int | float:
-        """The total capacity available.
+        pass
 
-        You can change :attr:`total_tokens` by assigning to this attribute. If
-        you make it larger, then the appropriate number of waiting tasks will
-        be woken immediately to take the new tokens. If you decrease
-        total_tokens below the number of tasks that are currently using the
-        resource, then all current tasks will be allowed to finish as normal,
-        but no new tasks will be allowed in until the total number of tasks
-        drops below the new total_tokens.
-
-        """
-        return self._total_tokens
-
-    @total_tokens.setter
-    def total_tokens(self, new_total_tokens: int | float) -> None:  # noqa: PYI041
-        if not isinstance(new_total_tokens, int) and new_total_tokens != math.inf:
-            raise TypeError("total_tokens must be an int or math.inf")
-        if new_total_tokens < 0:
-            raise ValueError("total_tokens must be >= 0")
-        self._total_tokens = new_total_tokens
-        self._wake_waiters()
 
     def _wake_waiters(self) -> None:
         available = self._total_tokens - len(self._borrowers)
@@ -295,13 +159,11 @@ class CapacityLimiter(AsyncContextManagerMixin):
 
     @property
     def borrowed_tokens(self) -> int:
-        """The amount of capacity that's currently in use."""
-        return len(self._borrowers)
+        pass
 
     @property
     def available_tokens(self) -> int | float:
-        """The amount of capacity that's available to use."""
-        return self.total_tokens - self.borrowed_tokens
+        pass
 
     @enable_ki_protection
     def acquire_nowait(self) -> None:
@@ -430,8 +292,6 @@ class CapacityLimiter(AsyncContextManagerMixin):
         return CapacityLimiterStatistics(
             borrowed_tokens=len(self._borrowers),
             total_tokens=self._total_tokens,
-            # Use a list instead of a frozenset just in case we start to allow
-            # one borrower to hold multiple tokens in the future
             borrowers=list(self._borrowers),
             tasks_waiting=len(self._lot),
         )
@@ -439,31 +299,6 @@ class CapacityLimiter(AsyncContextManagerMixin):
 
 @final
 class Semaphore(AsyncContextManagerMixin):
-    """A `semaphore <https://en.wikipedia.org/wiki/Semaphore_(programming)>`__.
-
-    A semaphore holds an integer value, which can be incremented by
-    calling :meth:`release` and decremented by calling :meth:`acquire` – but
-    the value is never allowed to drop below zero. If the value is zero, then
-    :meth:`acquire` will block until someone calls :meth:`release`.
-
-    If you're looking for a :class:`Semaphore` to limit the number of tasks
-    that can access some resource simultaneously, then consider using a
-    :class:`CapacityLimiter` instead.
-
-    This object's interface is similar to, but different from, that of
-    :class:`threading.Semaphore`.
-
-    A :class:`Semaphore` object can be used as an async context manager; it
-    blocks on entry but not on exit.
-
-    Args:
-      initial_value (int): A non-negative integer giving semaphore's initial
-        value.
-      max_value (int or None): If given, makes this a "bounded" semaphore that
-        raises an error if the value is about to exceed the given
-        ``max_value``.
-
-    """
 
     def __init__(self, initial_value: int, *, max_value: int | None = None) -> None:
         if not isinstance(initial_value, int):
@@ -476,9 +311,6 @@ class Semaphore(AsyncContextManagerMixin):
             if max_value < initial_value:
                 raise ValueError("max_values must be >= initial_value")
 
-        # Invariants:
-        # bool(self._lot) implies self._value == 0
-        # (or equivalently: self._value > 0 implies not self._lot)
         self._lot = trio.lowlevel.ParkingLot()
         self._value = initial_value
         self._max_value = max_value
@@ -492,13 +324,11 @@ class Semaphore(AsyncContextManagerMixin):
 
     @property
     def value(self) -> int:
-        """The current value of the semaphore."""
-        return self._value
+        pass
 
     @property
     def max_value(self) -> int | None:
-        """The maximum allowed value. May be None to indicate no limit."""
-        return self._max_value
+        pass
 
     @enable_ki_protection
     def acquire_nowait(self) -> None:
@@ -560,17 +390,6 @@ class Semaphore(AsyncContextManagerMixin):
 
 @attrs.frozen
 class LockStatistics:
-    """An object containing debugging information for a Lock.
-
-    Currently the following fields are defined:
-
-    * ``locked`` (boolean): indicating whether the lock is held.
-    * ``owner``: the :class:`trio.lowlevel.Task` currently holding the lock,
-      or None if the lock is not held.
-    * ``tasks_waiting`` (int): The number of tasks blocked on this lock's
-      :meth:`trio.Lock.acquire` method.
-
-    """
 
     locked: bool
     owner: Task | None
@@ -613,7 +432,6 @@ class _LockImpl(AsyncContextManagerMixin):
         if self._owner is task:
             raise RuntimeError("attempt to re-acquire an already held Lock")
         elif self._owner is None and not self._lot:
-            # No-one owns it
             self._owner = task
             add_parking_lot_breaker(task, self._lot)
         else:
@@ -631,9 +449,6 @@ class _LockImpl(AsyncContextManagerMixin):
             self.acquire_nowait()
         except trio.WouldBlock:
             try:
-                # NOTE: it's important that the contended acquire path is just
-                # "_lot.park()", because that's how Condition.wait() acquires the
-                # lock as well.
                 await self._lot.park()
             except trio.BrokenResourceError:
                 raise trio.BrokenResourceError(
@@ -681,95 +496,16 @@ class _LockImpl(AsyncContextManagerMixin):
 
 @final
 class Lock(_LockImpl):
-    """A classic `mutex
-    <https://en.wikipedia.org/wiki/Lock_(computer_science)>`__.
-
-    This is a non-reentrant, single-owner lock. Unlike
-    :class:`threading.Lock`, only the owner of the lock is allowed to release
-    it.
-
-    A :class:`Lock` object can be used as an async context manager; it
-    blocks on entry but not on exit.
-
-    """
+    pass
 
 
 @final
 class StrictFIFOLock(_LockImpl):
-    r"""A variant of :class:`Lock` where tasks are guaranteed to acquire the
-    lock in strict first-come-first-served order.
-
-    An example of when this is useful is if you're implementing something like
-    :class:`trio.SSLStream` or an HTTP/2 server using `h2
-    <https://hyper-h2.readthedocs.io/>`__, where you have multiple concurrent
-    tasks that are interacting with a shared state machine, and at
-    unpredictable moments the state machine requests that a chunk of data be
-    sent over the network. (For example, when using h2 simply reading incoming
-    data can occasionally `create outgoing data to send
-    <https://http2.github.io/http2-spec/#PING>`__.) The challenge is to make
-    sure that these chunks are sent in the correct order, without being
-    garbled.
-
-    One option would be to use a regular :class:`Lock`, and wrap it around
-    every interaction with the state machine::
-
-        # This approach is sometimes workable but often sub-optimal; see below
-        async with lock:
-            state_machine.do_something()
-            if state_machine.has_data_to_send():
-                await conn.sendall(state_machine.get_data_to_send())
-
-    But this can be problematic. If you're using h2 then *usually* reading
-    incoming data doesn't create the need to send any data, so we don't want
-    to force every task that tries to read from the network to sit and wait
-    a potentially long time for ``sendall`` to finish. And in some situations
-    this could even potentially cause a deadlock, if the remote peer is
-    waiting for you to read some data before it accepts the data you're
-    sending.
-
-    :class:`StrictFIFOLock` provides an alternative. We can rewrite our
-    example like::
-
-        # Note: no awaits between when we start using the state machine and
-        # when we block to take the lock!
-        state_machine.do_something()
-        if state_machine.has_data_to_send():
-            # Notice that we fetch the data to send out of the state machine
-            # *before* sleeping, so that other tasks won't see it.
-            chunk = state_machine.get_data_to_send()
-            async with strict_fifo_lock:
-                await conn.sendall(chunk)
-
-    First we do all our interaction with the state machine in a single
-    scheduling quantum (notice there are no ``await``\s in there), so it's
-    automatically atomic with respect to other tasks. And then if and only if
-    we have data to send, we get in line to send it – and
-    :class:`StrictFIFOLock` guarantees that each task will send its data in
-    the same order that the state machine generated it.
-
-    Currently, :class:`StrictFIFOLock` is identical to :class:`Lock`,
-    but (a) this may not always be true in the future, especially if Trio ever
-    implements `more sophisticated scheduling policies
-    <https://github.com/python-trio/trio/issues/32>`__, and (b) the above code
-    is relying on a pretty subtle property of its lock. Using a
-    :class:`StrictFIFOLock` acts as an executable reminder that you're relying
-    on this property.
-
-    """
+    pass
 
 
 @attrs.frozen
 class ConditionStatistics:
-    r"""An object containing debugging information for a Condition.
-
-    Currently the following fields are defined:
-
-    * ``tasks_waiting`` (int): The number of tasks blocked on this condition's
-      :meth:`trio.Condition.wait` method.
-    * ``lock_statistics``: The result of calling the underlying
-      :class:`Lock`\s  :meth:`~Lock.statistics` method.
-
-    """
 
     tasks_waiting: int
     lock_statistics: LockStatistics
@@ -777,19 +513,6 @@ class ConditionStatistics:
 
 @final
 class Condition(AsyncContextManagerMixin):
-    """A classic `condition variable
-    <https://en.wikipedia.org/wiki/Monitor_(synchronization)>`__, similar to
-    :class:`threading.Condition`.
-
-    A :class:`Condition` object can be used as an async context manager to
-    acquire the underlying lock; it blocks on entry but not on exit.
-
-    Args:
-      lock (Lock): the lock object to use. If given, must be a
-          :class:`trio.Lock`. If None, a new :class:`Lock` will be allocated
-          and used.
-
-    """
 
     def __init__(self, lock: Lock | None = None) -> None:
         if lock is None:
@@ -857,8 +580,6 @@ class Condition(AsyncContextManagerMixin):
         if trio.lowlevel.current_task() is not self._lock._owner:
             raise RuntimeError("must hold the lock to wait")
         self.release()
-        # NOTE: we go to sleep on self._lot, but we'll wake up on
-        # self._lock._lot. That's all that's required to acquire a Lock.
         try:
             await self._lot.park()
         except:
@@ -867,29 +588,10 @@ class Condition(AsyncContextManagerMixin):
             raise
 
     def notify(self, n: int = 1) -> None:
-        """Wake one or more tasks that are blocked in :meth:`wait`.
-
-        Args:
-          n (int): The number of tasks to wake.
-
-        Raises:
-          RuntimeError: if the calling task does not hold the lock.
-
-        """
-        if trio.lowlevel.current_task() is not self._lock._owner:
-            raise RuntimeError("must hold the lock to notify")
-        self._lot.repark(self._lock._lot, count=n)
+        pass
 
     def notify_all(self) -> None:
-        """Wake all tasks that are currently blocked in :meth:`wait`.
-
-        Raises:
-          RuntimeError: if the calling task does not hold the lock.
-
-        """
-        if trio.lowlevel.current_task() is not self._lock._owner:
-            raise RuntimeError("must hold the lock to notify")
-        self._lot.repark_all(self._lock._lot)
+        pass
 
     def statistics(self) -> ConditionStatistics:
         r"""Return an object containing debugging information.

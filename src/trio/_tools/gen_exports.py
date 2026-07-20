@@ -1,8 +1,4 @@
 #! /usr/bin/env python3
-"""
-Code generation script for class methods
-to be exported as public API
-"""
 
 from __future__ import annotations
 
@@ -20,8 +16,6 @@ import attrs
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
-# keep these imports up to date with conditional imports in test_gen_exports
-# isort: split
 import astor
 
 PREFIX = "_generated"
@@ -100,34 +94,7 @@ def create_passthrough_args(funcdef: ast.FunctionDef | ast.AsyncFunctionDef) -> 
 
 
 def run_black(file: File, source: str) -> tuple[bool, str]:
-    """Run black on the specified file.
-
-    Returns:
-      Tuple of success and result string.
-      ex.:
-        (False, "Failed to run black!\nerror: cannot format ...")
-        (True, "<formatted source>")
-
-    Raises:
-      ImportError: If black is not installed.
-    """
-    # imported to check that `subprocess` calls will succeed
-    import black  # noqa: F401
-
-    # Black has an undocumented API, but it doesn't easily allow reading configuration from
-    # pyproject.toml, and simultaneously pass in / receive the code as a string.
-    # https://github.com/psf/black/issues/779
-    result = subprocess.run(
-        # "-" as a filename = use stdin, return on stdout.
-        [sys.executable, "-m", "black", "--stdin-filename", file.path, "-"],
-        input=source,
-        capture_output=True,
-        encoding="utf8",
-    )
-
-    if result.returncode != 0:
-        return False, f"Failed to run black!\n{result.stderr}"
-    return True, result.stdout
+    pass
 
 
 def run_ruff(file: File, source: str) -> tuple[bool, str]:
@@ -142,11 +109,9 @@ def run_ruff(file: File, source: str) -> tuple[bool, str]:
     Raises:
       ImportError: If ruff is not installed.
     """
-    # imported to check that `subprocess` calls will succeed
     import ruff  # noqa: F401
 
     result = subprocess.run(
-        # "-" as a filename = use stdin, return on stdout.
         [
             sys.executable,
             "-m",
@@ -196,8 +161,6 @@ def gen_public_wrappers_source(file: File) -> str:
     header = [HEADER]
     header.append(file.imports)
     if file.platform:
-        # Simple checks to avoid repeating imports. If this messes up, type checkers/tests will
-        # just give errors.
         if "TYPE_CHECKING" not in file.imports:
             header.append("from typing import TYPE_CHECKING\n")
         if "import sys" not in file.imports:  # pragma: no cover
@@ -211,7 +174,6 @@ def gen_public_wrappers_source(file: File) -> str:
     source = astor.code_to_ast.parse_file(file.path)
     method_names = []
     for method in get_public_methods(source):
-        # Remove self from arguments
         assert method.args.args[0].arg == "self"
         del method.args.args[0]
         method_names.append(method.name)
@@ -223,40 +185,31 @@ def gen_public_wrappers_source(file: File) -> str:
         else:
             is_cm = False
 
-        # Remove decorators
         method.decorator_list = [ast.Name("enable_ki_protection")]
 
-        # Create pass through arguments
         new_args = create_passthrough_args(method)
 
-        # Remove method body without the docstring
         if ast.get_docstring(method) is None:
             del method.body[:]
         else:
-            # The first entry is always the docstring
             del method.body[1:]
 
-        # Create the function definition including the body
         func = astor.to_source(method, indent_with=" " * 4)
 
         if is_cm:  # pragma: no cover
             func = func.replace("->Iterator", "->AbstractContextManager")
 
-        # Create export function body
         template = TEMPLATE.format(
             " await " if isinstance(method, ast.AsyncFunctionDef) else " ",
             file.modname,
             method.name + new_args,
         )
 
-        # Assemble function definition arguments and body
         snippet = func + indent(template, " " * 4)
 
-        # Append the snippet to the corresponding module
         generated.append(snippet)
 
     method_names.sort()
-    # Insert after the header, before function definitions
     generated.insert(1, f"__all__ = {method_names!r}")
     return "\n\n".join(generated)
 
@@ -292,12 +245,9 @@ def process(files: Iterable[File], *, do_test: bool) -> None:
             Path(new_path).write_text(new_source, encoding="utf-8", newline="\n")
         print("Regenerated sources successfully.")
         if not matches_disk:  # TODO: test this branch
-            # With pre-commit integration, show that we edited files.
             sys.exit(1)
 
 
-# This is in fact run in CI, but only in the formatting check job, which
-# doesn't collect coverage.
 def main() -> None:  # pragma: no cover
     parser = argparse.ArgumentParser(
         description="Generate python code for public api wrappers",
@@ -311,7 +261,6 @@ def main() -> None:  # pragma: no cover
     parsed_args = parser.parse_args()
 
     source_root = Path.cwd()
-    # Double-check we found the right directory
     assert (source_root / "LICENSE").exists()
     core = source_root / "src/trio/_core"
     to_wrap = [

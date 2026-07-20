@@ -43,28 +43,6 @@ if TYPE_CHECKING:
 def _wraps_async(  # type: ignore[explicit-any]
     wrapped: Callable[..., object],
 ) -> Callable[[Callable[P, T]], Callable[P, Awaitable[T]]]:
-    def decorator(fn: Callable[P, T]) -> Callable[P, Awaitable[T]]:
-        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-            return await run_sync(partial(fn, *args, **kwargs))
-
-        update_wrapper(wrapper, wrapped)
-        if wrapped.__doc__:
-            module = wrapped.__module__
-            # these are exported specially from CPython's intersphinx inventory
-            module = module.replace("pathlib._local", "pathlib")
-            module = module.replace("pathlib._abc", "pathlib")
-
-            name = wrapped.__qualname__
-            name = name.replace(
-                "PathBase", "Path"
-            )  # I'm not sure why this is necessary
-
-            wrapper.__doc__ = (
-                f"Like :meth:`~{module}.{name}`, but async.\n"
-                f"\n"
-                f"{cleandoc(wrapped.__doc__)}\n"
-            )
-        return wrapper
 
     return decorator
 
@@ -72,9 +50,6 @@ def _wraps_async(  # type: ignore[explicit-any]
 def _wrap_method(
     fn: Callable[Concatenate[pathlib.Path, P], T],
 ) -> Callable[Concatenate[Path, P], Awaitable[T]]:
-    @_wraps_async(fn)
-    def wrapper(self: Path, /, *args: P.args, **kwargs: P.kwargs) -> T:
-        return fn(self._wrapped_cls(self), *args, **kwargs)
 
     return wrapper
 
@@ -82,9 +57,6 @@ def _wrap_method(
 def _wrap_method_path(
     fn: Callable[Concatenate[pathlib.Path, P], pathlib.Path],
 ) -> Callable[Concatenate[PathT, P], Awaitable[PathT]]:
-    @_wraps_async(fn)
-    def wrapper(self: PathT, /, *args: P.args, **kwargs: P.kwargs) -> PathT:
-        return self.__class__(fn(self._wrapped_cls(self), *args, **kwargs))
 
     return wrapper
 
@@ -92,9 +64,6 @@ def _wrap_method_path(
 def _wrap_method_path_iterable(
     fn: Callable[Concatenate[pathlib.Path, P], Iterable[pathlib.Path]],
 ) -> Callable[Concatenate[PathT, P], Awaitable[Iterable[PathT]]]:
-    @_wraps_async(fn)
-    def wrapper(self: PathT, /, *args: P.args, **kwargs: P.kwargs) -> Iterable[PathT]:
-        return map(self.__class__, [*fn(self._wrapped_cls(self), *args, **kwargs)])
 
     if wrapper.__doc__:
         wrapper.__doc__ += (
@@ -117,11 +86,6 @@ def _wrap_method_path_iterable(
 
 
 class Path(pathlib.PurePath):
-    """An async :class:`pathlib.Path` that executes blocking methods in :meth:`trio.to_thread.run_sync`.
-
-    Instantiating :class:`Path` returns a concrete platform-specific subclass, one of :class:`PosixPath` or
-    :class:`WindowsPath`.
-    """
 
     __slots__ = ()
 
@@ -137,10 +101,6 @@ class Path(pathlib.PurePath):
     def cwd(cls) -> Self:
         return cls(pathlib.Path.cwd())
 
-    @classmethod
-    @_wraps_async(pathlib.Path.home)
-    def home(cls) -> Self:
-        return cls(pathlib.Path.home())
 
     @overload
     async def open(
@@ -212,9 +172,6 @@ class Path(pathlib.PurePath):
         newline: str | None = None,
     ) -> AsyncIOWrapper[IO[Any]]: ...
 
-    @_wraps_async(pathlib.Path.open)
-    def open(self, *args: Any, **kwargs: Any) -> AsyncIOWrapper[IO[Any]]:  # type: ignore[misc, explicit-any]  # Overload return mismatch.
-        return wrap_file(self._wrapped_cls(self).open(*args, **kwargs))
 
     def __repr__(self) -> str:
         return f"trio.Path({str(self)!r})"
@@ -263,9 +220,6 @@ class Path(pathlib.PurePath):
     if sys.version_info >= (3, 13):
         full_match = _wrap_method(pathlib.Path.full_match)
 
-    # TODO: only allow this for Python <3.19.
-    def as_uri(self) -> str:
-        return pathlib.PurePath.as_uri(self)
 
 
 if Path.relative_to.__doc__:  # pragma: no branch
@@ -274,7 +228,6 @@ if Path.relative_to.__doc__:  # pragma: no branch
 
 @final
 class PosixPath(Path, pathlib.PurePosixPath):
-    """An async :class:`pathlib.PosixPath` that executes blocking methods in :meth:`trio.to_thread.run_sync`."""
 
     __slots__ = ()
 
@@ -283,7 +236,6 @@ class PosixPath(Path, pathlib.PurePosixPath):
 
 @final
 class WindowsPath(Path, pathlib.PureWindowsPath):
-    """An async :class:`pathlib.WindowsPath` that executes blocking methods in :meth:`trio.to_thread.run_sync`."""
 
     __slots__ = ()
 

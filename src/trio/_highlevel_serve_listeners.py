@@ -8,8 +8,6 @@ from typing import Any, NoReturn, TypeVar
 
 import trio
 
-# Errors that accept(2) can return, and which indicate that the system is
-# overloaded
 ACCEPT_CAPACITY_ERRNOS = {
     errno.EMFILE,
     errno.ENFILE,
@@ -17,10 +15,8 @@ ACCEPT_CAPACITY_ERRNOS = {
     errno.ENOBUFS,
 }
 
-# How long to sleep when we get one of those errors
 SLEEP_TIME = 0.100
 
-# The logger we use to complain when this happens
 LOGGER = logging.getLogger("trio.serve_listeners")
 
 
@@ -29,42 +25,10 @@ ListenerT = TypeVar("ListenerT", bound=trio.abc.Listener[Any])  # type: ignore[e
 Handler = Callable[[StreamT], Awaitable[object]]
 
 
-async def _run_handler(stream: StreamT, handler: Handler[StreamT]) -> None:
-    try:
-        await handler(stream)
-    finally:
-        await trio.aclose_forcefully(stream)
 
 
-async def _serve_one_listener(
-    listener: trio.abc.Listener[StreamT],
-    handler_nursery: trio.Nursery,
-    handler: Handler[StreamT],
-) -> NoReturn:
-    async with listener:
-        while True:
-            try:
-                stream = await listener.accept()
-            except OSError as exc:
-                if exc.errno in ACCEPT_CAPACITY_ERRNOS:
-                    LOGGER.error(
-                        "accept returned %s (%s); retrying in %s seconds",
-                        errno.errorcode[exc.errno],
-                        os.strerror(exc.errno),
-                        SLEEP_TIME,
-                        exc_info=True,
-                    )
-                    await trio.sleep(SLEEP_TIME)
-                else:
-                    raise
-            else:
-                handler_nursery.start_soon(_run_handler, stream, handler)
 
 
-# This cannot be typed correctly, we need generic typevar bounds / HKT to indicate the
-# relationship between StreamT & ListenerT.
-# https://github.com/python/typing/issues/1226
-# https://github.com/python/typing/issues/548
 
 
 async def serve_listeners(  # type: ignore[explicit-any]
@@ -138,9 +102,6 @@ async def serve_listeners(  # type: ignore[explicit-any]
             handler_nursery = nursery
         for listener in listeners:
             nursery.start_soon(_serve_one_listener, listener, handler_nursery, handler)
-        # The listeners are already queueing connections when we're called,
-        # but we wait until the end to call started() just in case we get an
-        # error or whatever.
         task_status.started(listeners)
 
     raise AssertionError(

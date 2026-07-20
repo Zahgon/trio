@@ -9,15 +9,11 @@ from .._highlevel_generic import StapledStream
 from ..abc import ReceiveStream, SendStream
 
 AsyncHook: TypeAlias = Callable[[], Awaitable[object]]
-# Would be nice to exclude awaitable here, but currently not possible.
 SyncHook: TypeAlias = Callable[[], object]
 SendStreamT = TypeVar("SendStreamT", bound=SendStream)
 ReceiveStreamT = TypeVar("ReceiveStreamT", bound=ReceiveStream)
 
 
-################################################################
-# In-memory streams - Unbounded buffer version
-################################################################
 
 
 class _UnboundedByteQueue:
@@ -29,10 +25,6 @@ class _UnboundedByteQueue:
             "another task is already fetching data",
         )
 
-    # This object treats "close" as being like closing the send side of a
-    # channel: so after close(), calling put() raises ClosedResourceError, and
-    # calling the get() variants drains the buffer and then returns an empty
-    # bytearray.
     def close(self) -> None:
         self._closed = True
         self._lot.unpark_all()
@@ -85,25 +77,6 @@ class _UnboundedByteQueue:
 
 @_util.final
 class MemorySendStream(SendStream):
-    """An in-memory :class:`~trio.abc.SendStream`.
-
-    Args:
-      send_all_hook: An async function, or None. Called from
-          :meth:`send_all`. Can do whatever you like.
-      wait_send_all_might_not_block_hook: An async function, or None. Called
-          from :meth:`wait_send_all_might_not_block`. Can do whatever you
-          like.
-      close_hook: A synchronous function, or None. Called from :meth:`close`
-          and :meth:`aclose`. Can do whatever you like.
-
-    .. attribute:: send_all_hook
-                   wait_send_all_might_not_block_hook
-                   close_hook
-
-       All of these hooks are also exposed as attributes on the object, and
-       you can change them at any time.
-
-    """
 
     def __init__(
         self,
@@ -124,8 +97,6 @@ class MemorySendStream(SendStream):
         calls the :attr:`send_all_hook` (if any).
 
         """
-        # Execute two checkpoints so we have more of a chance to detect
-        # buggy user code that calls this twice at the same time.
         with self._conflict_detector:
             await _core.checkpoint()
             await _core.checkpoint()
@@ -134,33 +105,13 @@ class MemorySendStream(SendStream):
                 await self.send_all_hook()
 
     async def wait_send_all_might_not_block(self) -> None:
-        """Calls the :attr:`wait_send_all_might_not_block_hook` (if any), and
-        then returns immediately.
-
-        """
-        # Execute two checkpoints so that we have more of a chance to detect
-        # buggy user code that calls this twice at the same time.
-        with self._conflict_detector:
-            await _core.checkpoint()
-            await _core.checkpoint()
-            # check for being closed:
-            self._outgoing.put(b"")
-            if self.wait_send_all_might_not_block_hook is not None:
-                await self.wait_send_all_might_not_block_hook()
+        pass
 
     def close(self) -> None:
         """Marks this stream as closed, and then calls the :attr:`close_hook`
         (if any).
 
         """
-        # XXX should this cancel any pending calls to the send_all_hook and
-        # wait_send_all_might_not_block_hook? Those are the only places where
-        # send_all and wait_send_all_might_not_block can be blocked.
-        #
-        # The way we set things up, send_all_hook is memory_stream_pump, and
-        # wait_send_all_might_not_block_hook is unset. memory_stream_pump is
-        # synchronous. So normally, send_all and wait_send_all_might_not_block
-        # cannot block at all.
         self._outgoing.close()
         if self.close_hook is not None:
             self.close_hook()
@@ -171,20 +122,7 @@ class MemorySendStream(SendStream):
         await _core.checkpoint()
 
     async def get_data(self, max_bytes: int | None = None) -> bytearray:
-        """Retrieves data from the internal buffer, blocking if necessary.
-
-        Args:
-          max_bytes (int or None): The maximum amount of data to
-              retrieve. None (the default) means to retrieve all the data
-              that's present (but still blocks until at least one byte is
-              available).
-
-        Returns:
-          If this stream has been closed, an empty bytearray. Otherwise, the
-          requested data.
-
-        """
-        return await self._outgoing.get(max_bytes)
+        pass
 
     def get_data_nowait(self, max_bytes: int | None = None) -> bytearray:
         """Retrieves data from the internal buffer, but doesn't block.
@@ -200,21 +138,6 @@ class MemorySendStream(SendStream):
 
 @_util.final
 class MemoryReceiveStream(ReceiveStream):
-    """An in-memory :class:`~trio.abc.ReceiveStream`.
-
-    Args:
-      receive_some_hook: An async function, or None. Called from
-          :meth:`receive_some`. Can do whatever you like.
-      close_hook: A synchronous function, or None. Called from :meth:`close`
-          and :meth:`aclose`. Can do whatever you like.
-
-    .. attribute:: receive_some_hook
-                   close_hook
-
-       Both hooks are also exposed as attributes on the object, and you can
-       change them at any time.
-
-    """
 
     def __init__(
         self,
@@ -234,8 +157,6 @@ class MemoryReceiveStream(ReceiveStream):
         data from the internal buffer, blocking if necessary.
 
         """
-        # Execute two checkpoints so we have more of a chance to detect
-        # buggy user code that calls this twice at the same time.
         with self._conflict_detector:
             await _core.checkpoint()
             await _core.checkpoint()
@@ -243,10 +164,6 @@ class MemoryReceiveStream(ReceiveStream):
                 raise _core.ClosedResourceError
             if self.receive_some_hook is not None:
                 await self.receive_some_hook()
-            # self._incoming's closure state tracks whether we got an EOF.
-            # self._closed tracks whether we, ourselves, are closed.
-            # self.close() sends an EOF to wake us up and sets self._closed,
-            # so after we wake up we have to check self._closed again.
             data = await self._incoming.get(max_bytes)
             if self._closed:
                 raise _core.ClosedResourceError
@@ -272,11 +189,9 @@ class MemoryReceiveStream(ReceiveStream):
         self._incoming.put(data)
 
     def put_eof(self) -> None:
-        """Adds an end-of-file marker to the internal buffer."""
-        self._incoming.close()
+        pass
 
 
-# TODO: investigate why this is necessary for the docs
 MemorySendStream.__module__ = MemorySendStream.__module__.replace(
     "._memory_streams", ""
 )
@@ -291,75 +206,11 @@ def memory_stream_pump(
     *,
     max_bytes: int | None = None,
 ) -> bool:
-    """Take data out of the given :class:`MemorySendStream`'s internal buffer,
-    and put it into the given :class:`MemoryReceiveStream`'s internal buffer.
-
-    Args:
-      memory_send_stream (MemorySendStream): The stream to get data from.
-      memory_receive_stream (MemoryReceiveStream): The stream to put data into.
-      max_bytes (int or None): The maximum amount of data to transfer in this
-          call, or None to transfer all available data.
-
-    Returns:
-      True if it successfully transferred some data, or False if there was no
-      data to transfer.
-
-    This is used to implement :func:`memory_stream_one_way_pair` and
-    :func:`memory_stream_pair`; see the latter's docstring for an example
-    of how you might use it yourself.
-
-    """
-    try:
-        data = memory_send_stream.get_data_nowait(max_bytes)
-    except _core.WouldBlock:
-        return False
-    try:
-        if not data:
-            memory_receive_stream.put_eof()
-        else:
-            memory_receive_stream.put_data(data)
-    except _core.ClosedResourceError:
-        raise _core.BrokenResourceError("MemoryReceiveStream was closed") from None
-    return True
+    pass
 
 
 def memory_stream_one_way_pair() -> tuple[MemorySendStream, MemoryReceiveStream]:
-    """Create a connected, pure-Python, unidirectional stream with infinite
-    buffering and flexible configuration options.
-
-    You can think of this as being a no-operating-system-involved
-    Trio-streamsified version of :func:`os.pipe` (except that :func:`os.pipe`
-    returns the streams in the wrong order – we follow the superior convention
-    that data flows from left to right).
-
-    Returns:
-      A tuple (:class:`MemorySendStream`, :class:`MemoryReceiveStream`), where
-      the :class:`MemorySendStream` has its hooks set up so that it calls
-      :func:`memory_stream_pump` from its
-      :attr:`~MemorySendStream.send_all_hook` and
-      :attr:`~MemorySendStream.close_hook`.
-
-    The end result is that data automatically flows from the
-    :class:`MemorySendStream` to the :class:`MemoryReceiveStream`. But you're
-    also free to rearrange things however you like. For example, you can
-    temporarily set the :attr:`~MemorySendStream.send_all_hook` to None if you
-    want to simulate a stall in data transmission. Or see
-    :func:`memory_stream_pair` for a more elaborate example.
-
-    """
-    send_stream = MemorySendStream()
-    recv_stream = MemoryReceiveStream()
-
-    def pump_from_send_stream_to_recv_stream() -> None:
-        memory_stream_pump(send_stream, recv_stream)
-
-    # await not used
-    async def async_pump_from_send_stream_to_recv_stream() -> None:  # noqa: RUF029
-        pump_from_send_stream_to_recv_stream()
-
-    send_stream.send_all_hook = async_pump_from_send_stream_to_recv_stream
-    send_stream.close_hook = pump_from_send_stream_to_recv_stream
-    return send_stream, recv_stream
+    pass
 
 
 def _make_stapled_pair(
@@ -455,9 +306,6 @@ def memory_stream_pair() -> tuple[
     return _make_stapled_pair(memory_stream_one_way_pair)
 
 
-################################################################
-# In-memory streams - Lockstep version
-################################################################
 
 
 class _LockstepByteQueue:
@@ -477,8 +325,6 @@ class _LockstepByteQueue:
     def _something_happened(self) -> None:
         self._waiters.unpark_all()
 
-    # Always wakes up when one side is closed, because everyone always reacts
-    # to that.
     async def _wait_for(self, fn: Callable[[], bool]) -> None:
         while True:
             if fn():
@@ -511,28 +357,15 @@ class _LockstepByteQueue:
             if self._data and self._receiver_closed:
                 raise _core.BrokenResourceError
 
-    async def wait_send_all_might_not_block(self) -> None:
-        with self._send_conflict_detector:
-            if self._sender_closed:
-                raise _core.ClosedResourceError
-            if self._receiver_closed:
-                await _core.checkpoint()
-                return
-            await self._wait_for(lambda: self._receiver_waiting)
-            if self._sender_closed:
-                raise _core.ClosedResourceError
 
     async def receive_some(self, max_bytes: int | None = None) -> bytes | bytearray:
         with self._receive_conflict_detector:
-            # Argument validation
             if max_bytes is not None:
                 max_bytes = operator.index(max_bytes)
                 if max_bytes < 1:
                     raise ValueError("max_bytes must be >= 1")
-            # State validation
             if self._receiver_closed:
                 raise _core.ClosedResourceError
-            # Wake wait_send_all_might_not_block and wait for data
             self._receiver_waiting = True
             self._something_happened()
             try:
@@ -541,10 +374,7 @@ class _LockstepByteQueue:
                 self._receiver_waiting = False
             if self._receiver_closed:
                 raise _core.ClosedResourceError
-            # Get data, possibly waking send_all
             if self._data:
-                # Neat trick: if max_bytes is None, then obj[:max_bytes] is
-                # the same as obj[:].
                 got = self._data[:max_bytes]
                 del self._data[:max_bytes]
                 self._something_happened()
@@ -568,8 +398,6 @@ class _LockstepSendStream(SendStream):
     async def send_all(self, data: bytes | bytearray | memoryview) -> None:
         await self._lbq.send_all(data)
 
-    async def wait_send_all_might_not_block(self) -> None:
-        await self._lbq.wait_send_all_might_not_block()
 
 
 class _LockstepReceiveStream(ReceiveStream):
@@ -588,46 +416,11 @@ class _LockstepReceiveStream(ReceiveStream):
 
 
 def lockstep_stream_one_way_pair() -> tuple[SendStream, ReceiveStream]:
-    """Create a connected, pure Python, unidirectional stream where data flows
-    in lockstep.
-
-    Returns:
-      A tuple
-      (:class:`~trio.abc.SendStream`, :class:`~trio.abc.ReceiveStream`).
-
-    This stream has *absolutely no* buffering. Each call to
-    :meth:`~trio.abc.SendStream.send_all` will block until all the given data
-    has been returned by a call to
-    :meth:`~trio.abc.ReceiveStream.receive_some`.
-
-    This can be useful for testing flow control mechanisms in an extreme case,
-    or for setting up "clogged" streams to use with
-    :func:`check_one_way_stream` and friends.
-
-    In addition to fulfilling the :class:`~trio.abc.SendStream` and
-    :class:`~trio.abc.ReceiveStream` interfaces, the return objects
-    also have a synchronous ``close`` method.
-
-    """
-
-    lbq = _LockstepByteQueue()
-    return _LockstepSendStream(lbq), _LockstepReceiveStream(lbq)
+    pass
 
 
 def lockstep_stream_pair() -> tuple[
     StapledStream[SendStream, ReceiveStream],
     StapledStream[SendStream, ReceiveStream],
 ]:
-    """Create a connected, pure-Python, bidirectional stream where data flows
-    in lockstep.
-
-    Returns:
-      A tuple (:class:`~trio.StapledStream`, :class:`~trio.StapledStream`).
-
-    This is a convenience function that creates two one-way streams using
-    :func:`lockstep_stream_one_way_pair`, and then uses
-    :class:`~trio.StapledStream` to combine them into a single bidirectional
-    stream.
-
-    """
-    return _make_stapled_pair(lockstep_stream_one_way_pair)
+    pass

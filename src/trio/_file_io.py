@@ -33,7 +33,6 @@ if TYPE_CHECKING:
 
     from ._sync import CapacityLimiter
 
-# This list is also in the docs, make sure to keep them in sync
 _FILE_SYNC_ATTRS: set[str] = {
     "closed",
     "encoding",
@@ -44,7 +43,6 @@ _FILE_SYNC_ATTRS: set[str] = {
     "readable",
     "seekable",
     "writable",
-    # not defined in *IOBase:
     "buffer",
     "raw",
     "line_buffering",
@@ -55,7 +53,6 @@ _FILE_SYNC_ATTRS: set[str] = {
     "getbuffer",
 }
 
-# This list is also in the docs, make sure to keep them in sync
 _FILE_ASYNC_METHODS: set[str] = {
     "flush",
     "read",
@@ -69,7 +66,6 @@ _FILE_ASYNC_METHODS: set[str] = {
     "truncate",
     "write",
     "writelines",
-    # not defined in *IOBase:
     "readinto1",
     "peek",
 }
@@ -83,23 +79,10 @@ T_contra = TypeVar("T_contra", contravariant=True)
 AnyStr_co = TypeVar("AnyStr_co", str, bytes, covariant=True)
 AnyStr_contra = TypeVar("AnyStr_contra", str, bytes, contravariant=True)
 
-# This is a little complicated. IO objects have a lot of methods, and which are available on
-# different types varies wildly. We want to match the interface of whatever file we're wrapping.
-# This pile of protocols each has one sync method/property, meaning they're going to be compatible
-# with a file class that supports that method/property. The ones parameterized with AnyStr take
-# either str or bytes depending.
 
-# The wrapper is then a generic class, where the typevar is set to the type of the sync file we're
-# wrapping. For generics, adding a type to self has a special meaning - properties/methods can be
-# conditional - it's only valid to call them if the object you're accessing them on is compatible
-# with that type hint. By using the protocols, the type checker will be checking to see if the
-# wrapped type has that method, and only allow the methods that do to be called. We can then alter
-# the signature however it needs to match runtime behaviour.
-# More info: https://mypy.readthedocs.io/en/stable/more_types.html#advanced-uses-of-self-types
 if TYPE_CHECKING:
     from typing_extensions import Buffer, Protocol
 
-    # fmt: off
 
     class _HasClosed(Protocol):
         @property
@@ -120,7 +103,6 @@ if TYPE_CHECKING:
         def isatty(self) -> bool: ...
 
     class _HasNewlines(Protocol[T_co]):
-        # Type varies here - documented to be None, tuple of strings, strings. Typeshed uses Any.
         @property
         def newlines(self) -> T_co: ...
 
@@ -200,39 +182,26 @@ if TYPE_CHECKING:
         def write(self, data: T_contra, /) -> int: ...
 
     class _CanWriteLines(Protocol[T_contra]):
-        # The lines parameter varies for bytes/str, so use a typevar to make the async match.
         def writelines(self, lines: Iterable[T_contra], /) -> None: ...
 
     class _CanPeek(Protocol[AnyStr_co]):
         def peek(self, size: int = 0, /) -> AnyStr_co: ...
 
     class _CanDetach(Protocol[T_co]):
-        # The T typevar will be the unbuffered/binary file this file wraps.
         def detach(self) -> T_co: ...
 
     class _CanClose(Protocol):
         def close(self) -> None: ...
 
 
-# FileT needs to be covariant for the protocol trick to work - the real IO types are effectively a
-# subtype of the protocols.
 class AsyncIOWrapper(AsyncResource, Generic[FileT_co]):
-    """A generic :class:`~io.IOBase` wrapper that implements the :term:`asynchronous
-    file object` interface. Wrapped methods that could block are executed in
-    :meth:`trio.to_thread.run_sync`.
-
-    All properties and methods defined in :mod:`~io` are exposed by this
-    wrapper, if they exist in the wrapped file object.
-    """
 
     def __init__(self, file: FileT_co) -> None:
         self._wrapped = file
 
     @property
     def wrapped(self) -> FileT_co:
-        """object: A reference to the wrapped file object"""
-
-        return self._wrapped
+        pass
 
     if not TYPE_CHECKING:
 
@@ -242,15 +211,7 @@ class AsyncIOWrapper(AsyncResource, Generic[FileT_co]):
             if name in _FILE_ASYNC_METHODS:
                 meth = getattr(self._wrapped, name)
 
-                @async_wraps(self.__class__, self._wrapped.__class__, name)
-                async def wrapper(
-                    *args: Callable[..., T],
-                    **kwargs: object | str | bool | CapacityLimiter | None,
-                ) -> T:
-                    func = partial(meth, *args, **kwargs)
-                    return await trio.to_thread.run_sync(func)
 
-                # cache the generated method
                 setattr(self, name, wrapper)
                 return wrapper
 
@@ -291,15 +252,12 @@ class AsyncIOWrapper(AsyncResource, Generic[FileT_co]):
 
         """
 
-        # ensure the underling file is closed during cancellation
         with trio.CancelScope(shield=True):
             await trio.to_thread.run_sync(self._wrapped.close)
 
         await trio.lowlevel.checkpoint_if_cancelled()
 
     if TYPE_CHECKING:
-        # fmt: off
-        # Based on typing.IO and io stubs.
         @property
         def closed(self: AsyncIOWrapper[_HasClosed]) -> bool: ...
         @property
@@ -344,7 +302,6 @@ class AsyncIOWrapper(AsyncResource, Generic[FileT_co]):
         async def peek(self: AsyncIOWrapper[_CanPeek[AnyStr]], size: int = 0, /) -> AnyStr: ...
 
 
-# Type hints are copied from builtin open.
 _OpenFile = Union["StrOrBytesPath", int]
 _Opener = Callable[[str, int], int]
 
@@ -450,37 +407,7 @@ async def open_file(
     closefd: bool = True,
     opener: _Opener | None = None,
 ) -> AsyncIOWrapper[object]:
-    """Asynchronous version of :func:`open`.
-
-    Returns:
-        An :term:`asynchronous file object`
-
-    Example::
-
-        async with await trio.open_file(filename) as f:
-            async for line in f:
-                pass
-
-        assert f.closed
-
-    See also:
-      :func:`trio.Path.open`
-
-    """
-    file_ = wrap_file(
-        await trio.to_thread.run_sync(
-            io.open,
-            file,
-            mode,
-            buffering,
-            encoding,
-            errors,
-            newline,
-            closefd,
-            opener,
-        ),
-    )
-    return file_
+    pass
 
 
 def wrap_file(file: FileT) -> AsyncIOWrapper[FileT]:

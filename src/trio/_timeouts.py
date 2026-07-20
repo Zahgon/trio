@@ -24,7 +24,6 @@ def move_on_at(deadline: float, *, shield: bool = False) -> trio.CancelScope:
       ValueError: if deadline is NaN.
 
     """
-    # CancelScope validates that deadline isn't math.nan
     return trio.CancelScope(deadline=deadline, shield=shield)
 
 
@@ -47,7 +46,6 @@ def move_on_after(
       ValueError: if ``seconds`` is less than zero or NaN.
 
     """
-    # duplicate validation logic to have the correct parameter name
     if seconds < 0:
         raise ValueError("`seconds` must be non-negative")
     if math.isnan(seconds):
@@ -112,10 +110,7 @@ async def sleep(seconds: float) -> None:
 
 
 class TooSlowError(Exception):
-    """Raised by :func:`fail_after` and :func:`fail_at` if the timeout
-    expires.
-
-    """
+    pass
 
 
 @contextmanager
@@ -124,32 +119,7 @@ def fail_at(
     *,
     shield: bool = False,
 ) -> Generator[trio.CancelScope, None, None]:
-    """Creates a cancel scope with the given deadline, and raises an error if it
-    is actually cancelled.
-
-    This function and :func:`move_on_at` are similar in that both create a
-    cancel scope with a given absolute deadline, and if the deadline expires
-    then both will cause :exc:`Cancelled` to be raised within the scope. The
-    difference is that when the :exc:`Cancelled` exception reaches
-    :func:`move_on_at`, it's caught and discarded. When it reaches
-    :func:`fail_at`, then it's caught and :exc:`TooSlowError` is raised in its
-    place.
-
-    Args:
-      deadline (float): The deadline.
-      shield (bool): Initial value for the `~trio.CancelScope.shield` attribute
-          of the newly created cancel scope.
-
-    Raises:
-      TooSlowError: if a :exc:`Cancelled` exception is raised in this scope
-        and caught by the context manager.
-      ValueError: if deadline is NaN.
-
-    """
-    with move_on_at(deadline, shield=shield) as scope:
-        yield scope
-    if scope.cancelled_caught:
-        raise TooSlowError
+    pass
 
 
 @contextmanager
@@ -158,38 +128,9 @@ def fail_after(
     *,
     shield: bool = False,
 ) -> Generator[trio.CancelScope, None, None]:
-    """Creates a cancel scope with the given timeout, and raises an error if
-    it is actually cancelled.
-
-    This function and :func:`move_on_after` are similar in that both create a
-    cancel scope with a given timeout, and if the timeout expires then both
-    will cause :exc:`Cancelled` to be raised within the scope. The difference
-    is that when the :exc:`Cancelled` exception reaches :func:`move_on_after`,
-    it's caught and discarded. When it reaches :func:`fail_after`, then it's
-    caught and :exc:`TooSlowError` is raised in its place.
-
-    The deadline of the cancel scope is calculated upon entering.
-
-    Args:
-      seconds (float): The timeout.
-      shield (bool): Initial value for the `~trio.CancelScope.shield` attribute
-          of the newly created cancel scope.
-
-    Raises:
-      TooSlowError: if a :exc:`Cancelled` exception is raised in this scope
-        and caught by the context manager.
-      ValueError: if *seconds* is less than zero or NaN.
-
-    """
-    with move_on_after(seconds, shield=shield) as scope:
-        yield scope
-    if scope.cancelled_caught:
-        raise TooSlowError
+    pass
 
 
-# Users don't need to know that fail_at & fail_after wraps move_on_at and move_on_after
-# and there is no functional difference. So we replace the return value when generating
-# documentation.
 if "sphinx.ext.autodoc" in sys.modules:
     import inspect
 

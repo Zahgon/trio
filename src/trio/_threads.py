@@ -39,8 +39,6 @@ RetT = TypeVar("RetT")
 
 
 class _ParentTaskData(threading.local):
-    """Global due to Threading API, thread local storage for data related to the
-    parent task of native Trio threads."""
 
     token: TrioToken
     abandon_on_cancel: bool
@@ -51,8 +49,6 @@ class _ParentTaskData(threading.local):
 PARENT_TASK_DATA = _ParentTaskData()
 
 _limiter_local: RunVar[CapacityLimiter] = RunVar("limiter")
-# I pulled this number out of the air; it isn't based on anything. Probably we
-# should make some kind of measurements to pick a good value.
 DEFAULT_LIMIT = 40
 _thread_counter = count()
 
@@ -85,42 +81,11 @@ def _track_active_thread() -> Generator[None, None, None]:
 
 
 async def wait_all_threads_completed() -> None:
-    """Wait until no threads are still running tasks.
-
-    This is intended to be used when testing code with trio.to_thread to
-    make sure no tasks are still making progress in a thread. See the
-    following code for a usage example::
-
-        async def wait_all_settled():
-            while True:
-                await trio.testing.wait_all_threads_complete()
-                await trio.testing.wait_all_tasks_blocked()
-                if trio.testing.active_thread_count() == 0:
-                    break
-    """
-
-    await checkpoint()
-
-    try:
-        active_threads_local = _active_threads_local.get()
-    except LookupError:
-        # If there would have been active threads, the
-        # _active_threads_local would have been set
-        return
-
-    while active_threads_local.count != 0:
-        await active_threads_local.event.wait()
+    pass
 
 
 def active_thread_count() -> int:
-    """Returns the number of threads that are currently running a task
-
-    See `trio.testing.wait_all_threads_completed`
-    """
-    try:
-        return _active_threads_local.get().count
-    except LookupError:
-        return 0
+    pass
 
 
 def current_default_thread_limiter() -> CapacityLimiter:
@@ -139,16 +104,11 @@ def current_default_thread_limiter() -> CapacityLimiter:
     return limiter
 
 
-# Eventually we might build this into a full-fledged deadlock-detection
-# system; see https://github.com/python-trio/trio/issues/182
-# But for now we just need an object to stand in for the thread, so we can
-# keep track of who's holding the CapacityLimiter's token.
 @attrs.frozen(eq=False, slots=False)
 class ThreadPlaceholder:
     name: str
 
 
-# Types for the to_thread_run_sync message loop
 @attrs.frozen(eq=False, slots=False)
 class Run(Generic[RetT]):  # type: ignore[explicit-any]
     afn: Callable[..., Awaitable[RetT]]  # type: ignore[explicit-any]
@@ -162,13 +122,8 @@ class Run(Generic[RetT]):  # type: ignore[explicit-any]
         factory=stdlib_queue.SimpleQueue,
     )
 
-    @disable_ki_protection
-    async def unprotected_afn(self) -> RetT:
-        coro = coroutine_or_error(self.afn, *self.args)
-        return await coro
 
     async def run(self) -> None:
-        # we use extra checkpoints to pick up and reset any context changes
         task = trio.lowlevel.current_task()
         old_context = task.context
         task.context = self.context.copy()
@@ -178,34 +133,8 @@ class Run(Generic[RetT]):  # type: ignore[explicit-any]
         await trio.lowlevel.cancel_shielded_checkpoint()
         self.queue.put_nowait(result)
 
-    async def run_system(self) -> None:
-        result = await outcome.acapture(self.unprotected_afn)
-        self.queue.put_nowait(result)
 
-    def run_in_host_task(self, token: TrioToken) -> None:
-        task_register = PARENT_TASK_DATA.task_register
 
-        def in_trio_thread() -> None:
-            task = task_register[0]
-            assert task is not None, "guaranteed by abandon_on_cancel semantics"
-            trio.lowlevel.reschedule(task, outcome.Value(self))
-
-        token.run_sync_soon(in_trio_thread)
-
-    def run_in_system_nursery(self, token: TrioToken) -> None:
-        def in_trio_thread() -> None:
-            try:
-                trio.lowlevel.spawn_system_task(
-                    self.run_system,
-                    name=self.afn,
-                    context=self.context,
-                )
-            except RuntimeError:  # system nursery is closed
-                self.queue.put_nowait(
-                    outcome.Error(trio.RunFinishedError("system nursery is closed")),
-                )
-
-        token.run_sync_soon(in_trio_thread)
 
 
 @attrs.frozen(eq=False, slots=False)
@@ -221,36 +150,12 @@ class RunSync(Generic[RetT]):  # type: ignore[explicit-any]
         factory=stdlib_queue.SimpleQueue,
     )
 
-    @disable_ki_protection
-    def unprotected_fn(self) -> RetT:
-        ret = self.context.run(self.fn, *self.args)
-
-        if inspect.iscoroutine(ret):
-            # Manually close coroutine to avoid RuntimeWarnings
-            ret.close()
-            raise TypeError(
-                "Trio expected a synchronous function, but {!r} appears to be "
-                "asynchronous".format(getattr(self.fn, "__qualname__", self.fn)),
-            )
-
-        return ret
 
     def run_sync(self) -> None:
         result = outcome.capture(self.unprotected_fn)
         self.queue.put_nowait(result)
 
-    def run_in_host_task(self, token: TrioToken) -> None:
-        task_register = PARENT_TASK_DATA.task_register
 
-        def in_trio_thread() -> None:
-            task = task_register[0]
-            assert task is not None, "guaranteed by abandon_on_cancel semantics"
-            trio.lowlevel.reschedule(task, outcome.Value(self))
-
-        token.run_sync_soon(in_trio_thread)
-
-    def run_in_system_nursery(self, token: TrioToken) -> None:
-        token.run_sync_soon(self.run_sync)
 
 
 @enable_ki_protection
@@ -345,80 +250,25 @@ async def to_thread_run_sync(
 
     """
     await trio.lowlevel.checkpoint_if_cancelled()
-    # raise early if abandon_on_cancel.__bool__ raises
-    # and give a new name to ensure mypy knows it's never None
     abandon_bool = bool(abandon_on_cancel)
     if limiter is None:
         limiter = current_default_thread_limiter()
 
-    # Holds a reference to the task that's blocked in this function waiting
-    # for the result – or None if this function was cancelled and we should
-    # discard the result.
     task_register: list[trio.lowlevel.Task | None] = [trio.lowlevel.current_task()]
-    # Holds a reference to the raise_cancel function provided if a cancellation
-    # is attempted against this task - or None if no such delivery has happened.
     cancel_register: list[RaiseCancelT | None] = [None]  # type: ignore[assignment]
     name = f"trio.to_thread.run_sync-{next(_thread_counter)}"
     placeholder = ThreadPlaceholder(name)
 
-    # This function gets scheduled into the Trio run loop to deliver the
-    # thread's result.
-    def report_back_in_trio_thread_fn(result: outcome.Outcome[RetT]) -> None:
-        def do_release_then_return_result() -> RetT:
-            # release_on_behalf_of is an arbitrary user-defined method, so it
-            # might raise an error. If it does, we want that error to
-            # replace the regular return value, and if the regular return was
-            # already an exception then we want them to chain.
-            try:
-                return result.unwrap()
-            finally:
-                limiter.release_on_behalf_of(placeholder)
-
-        result = outcome.capture(do_release_then_return_result)
-        if task_register[0] is not None:
-            trio.lowlevel.reschedule(task_register[0], outcome.Value(result))
 
     current_trio_token = trio.lowlevel.current_trio_token()
 
     if thread_name is None:
         thread_name = f"{getattr(sync_fn, '__name__', None)} from {trio.lowlevel.current_task().name}"
 
-    def worker_fn() -> RetT:
-        PARENT_TASK_DATA.token = current_trio_token
-        PARENT_TASK_DATA.abandon_on_cancel = abandon_bool
-        PARENT_TASK_DATA.cancel_register = cancel_register
-        PARENT_TASK_DATA.task_register = task_register
-        try:
-            ret = context.run(sync_fn, *args)
-
-            if inspect.iscoroutine(ret):
-                # Manually close coroutine to avoid RuntimeWarnings
-                ret.close()
-                raise TypeError(
-                    "Trio expected a sync function, but {!r} appears to be "
-                    "asynchronous".format(getattr(sync_fn, "__qualname__", sync_fn)),
-                )
-
-            return ret
-        finally:
-            del PARENT_TASK_DATA.token
-            del PARENT_TASK_DATA.abandon_on_cancel
-            del PARENT_TASK_DATA.cancel_register
-            del PARENT_TASK_DATA.task_register
 
     context = contextvars.copy_context()
-    # Trio doesn't use current_async_library_cvar, but if someone
-    # else set it, it would now shine through since
-    # sniffio.thread_local isn't set in the new thread. Make sure
-    # the new thread sees that it's not running in async context.
     context.run(current_async_library_cvar.set, None)
 
-    def deliver_worker_fn_result(result: outcome.Outcome[RetT]) -> None:
-        # If the entire run finished, the task we're trying to contact is
-        # certainly long gone -- it must have been cancelled and abandoned
-        # us. Just ignore the error in this case.
-        with contextlib.suppress(trio.RunFinishedError):
-            current_trio_token.run_sync_soon(report_back_in_trio_thread_fn, result)
 
     await limiter.acquire_on_behalf_of(placeholder)
     with _track_active_thread():
@@ -428,20 +278,8 @@ async def to_thread_run_sync(
             limiter.release_on_behalf_of(placeholder)
             raise
 
-        def abort(raise_cancel: RaiseCancelT) -> trio.lowlevel.Abort:
-            # fill so from_thread_check_cancelled can raise
-            # 'raise_cancel' will immediately delete its reason object, so we make
-            # a copy in each thread
-            cancel_register[0] = raise_cancel
-            if abandon_bool:
-                # empty so report_back_in_trio_thread_fn cannot reschedule
-                task_register[0] = None
-                return trio.lowlevel.Abort.SUCCEEDED
-            else:
-                return trio.lowlevel.Abort.FAILED
 
         while True:
-            # wait_task_rescheduled return value cannot be typed
             msg_from_thread: outcome.Outcome[RetT] | Run[object] | RunSync[object] = (
                 await trio.lowlevel.wait_task_rescheduled(abort)
             )
@@ -499,33 +337,7 @@ def _send_message_to_trio(
     trio_token: TrioToken | None,
     message_to_trio: Run[RetT] | RunSync[RetT],
 ) -> RetT:
-    """Shared logic of from_thread functions"""
-    token_provided = trio_token is not None
-
-    if not token_provided:
-        try:
-            trio_token = PARENT_TASK_DATA.token
-        except AttributeError:
-            raise RuntimeError(
-                "this thread wasn't created by Trio, pass kwarg trio_token=...",
-            ) from None
-    elif not isinstance(trio_token, TrioToken):
-        raise RuntimeError("Passed kwarg trio_token is not of type TrioToken")
-
-    # Avoid deadlock by making sure we're not called from Trio thread
-    try:
-        trio.lowlevel.current_task()
-    except RuntimeError:
-        pass
-    else:
-        raise RuntimeError("this is a blocking function; call it from a thread")
-
-    if token_provided or PARENT_TASK_DATA.abandon_on_cancel:
-        message_to_trio.run_in_system_nursery(trio_token)
-    else:
-        message_to_trio.run_in_host_task(trio_token)
-
-    return message_to_trio.queue.get().unwrap()
+    pass
 
 
 def from_thread_run(
@@ -533,43 +345,7 @@ def from_thread_run(
     *args: Unpack[Ts],
     trio_token: TrioToken | None = None,
 ) -> RetT:
-    """Run the given async function in the parent Trio thread, blocking until it
-    is complete.
-
-    Returns:
-      Whatever ``afn(*args)`` returns.
-
-    Returns or raises whatever the given function returns or raises. It
-    can also raise exceptions of its own:
-
-    Raises:
-        RunFinishedError: if the corresponding call to :func:`trio.run` has
-            already completed, or if the run has started its final cleanup phase
-            and can no longer spawn new system tasks.
-        Cancelled: If the original call to :func:`trio.to_thread.run_sync` is cancelled
-            (if *trio_token* is None) or the call to :func:`trio.run` completes
-            (if *trio_token* is not None) while ``afn(*args)`` is running,
-            then *afn* is likely to raise :exc:`trio.Cancelled`.
-        RuntimeError: if you try calling this from inside the Trio thread,
-            which would otherwise cause a deadlock, or if no ``trio_token`` was
-            provided, and we can't infer one from context.
-        TypeError: if ``afn`` is not an asynchronous function.
-
-    **Locating a TrioToken**: There are two ways to specify which
-    `trio.run` loop to reenter:
-
-        - Spawn this thread from `trio.to_thread.run_sync`. Trio will
-          automatically capture the relevant Trio token and use it
-          to re-enter the same Trio task.
-        - Pass a keyword argument, ``trio_token`` specifying a specific
-          `trio.run` loop to re-enter. This is useful in case you have a
-          "foreign" thread, spawned using some other framework, and still want
-          to enter Trio, or if you want to use a new system task to call ``afn``,
-          maybe to avoid the cancellation context of a corresponding
-          `trio.to_thread.run_sync` task. You can get this token from
-          :func:`trio.lowlevel.current_trio_token`.
-    """
-    return _send_message_to_trio(trio_token, Run(afn, args))
+    pass
 
 
 def from_thread_run_sync(
@@ -577,34 +353,4 @@ def from_thread_run_sync(
     *args: Unpack[Ts],
     trio_token: TrioToken | None = None,
 ) -> RetT:
-    """Run the given sync function in the parent Trio thread, blocking until it
-    is complete.
-
-    Returns:
-      Whatever ``fn(*args)`` returns.
-
-    Returns or raises whatever the given function returns or raises. It
-    can also raise exceptions of its own:
-
-    Raises:
-        RunFinishedError: if the corresponding call to `trio.run` has
-            already completed.
-        RuntimeError: if you try calling this from inside the Trio thread,
-            which would otherwise cause a deadlock or if no ``trio_token`` was
-            provided, and we can't infer one from context.
-        TypeError: if ``fn`` is an async function.
-
-    **Locating a TrioToken**: There are two ways to specify which
-    `trio.run` loop to reenter:
-
-        - Spawn this thread from `trio.to_thread.run_sync`. Trio will
-          automatically capture the relevant Trio token and use it when you
-          want to re-enter Trio.
-        - Pass a keyword argument, ``trio_token`` specifying a specific
-          `trio.run` loop to re-enter. This is useful in case you have a
-          "foreign" thread, spawned using some other framework, and still want
-          to enter Trio, or if you want to use a new system task to call ``fn``,
-          maybe to avoid the cancellation context of a corresponding
-          `trio.to_thread.run_sync` task.
-    """
-    return _send_message_to_trio(trio_token, RunSync(fn, args))
+    pass

@@ -34,7 +34,6 @@ class _KqueueStatistics:
 @attrs.define(eq=False)
 class KqueueIOManager:
     _kqueue: select.kqueue = attrs.Factory(select.kqueue)
-    # {(ident, filter): Task or UnboundedQueue}
     _registered: dict[tuple[int, int], Task | UnboundedQueue[select.kevent]] = (
         attrs.Factory(dict)
     )
@@ -68,10 +67,6 @@ class KqueueIOManager:
         self._force_wakeup.wakeup_thread_and_signal_safe()
 
     def get_events(self, timeout: float) -> EventResult:
-        # max_events must be > 0 or kqueue gets cranky
-        # and we generally want this to be strictly larger than the actual
-        # number of events we get, so that we can tell that we've gotten
-        # all the events in just 1 call.
         max_events = len(self._registered) + 1
         events = []
         while True:
@@ -81,7 +76,6 @@ class KqueueIOManager:
                 break
             else:  # TODO: test this line
                 timeout = 0
-                # and loop back to the start
         return events
 
     def process_events(self, events: EventResult) -> None:
@@ -98,16 +92,6 @@ class KqueueIOManager:
             else:
                 receiver.put_nowait(event)  # TODO: test this line
 
-    # kevent registration is complicated -- e.g. aio submission can
-    # implicitly perform a EV_ADD, and EVFILT_PROC with NOTE_TRACK will
-    # automatically register filters for child processes. So our lowlevel
-    # API is *very* low-level: we expose the kqueue itself for adding
-    # events or sticking into AIO submission structs, and split waiting
-    # off into separate methods. It's your responsibility to make sure
-    # that handle_io never receives an event without a corresponding
-    # registration! This may be challenging if you want to be careful
-    # about e.g. KeyboardInterrupt. Possibly this API could be improved to
-    # be more ergonomic...
 
     @_public
     def current_kqueue(self) -> select.kqueue:
@@ -124,21 +108,7 @@ class KqueueIOManager:
         ident: int,
         filter: int,
     ) -> Iterator[_core.UnboundedQueue[select.kevent]]:
-        """TODO: these are implemented, but are currently more of a sketch than
-        anything real. See `#26
-        <https://github.com/python-trio/trio/issues/26>`__.
-        """
-        key = (ident, filter)
-        if key in self._registered:
-            raise _core.BusyResourceError(
-                "attempt to register multiple listeners for same ident/filter pair",
-            )
-        q = _core.UnboundedQueue[select.kevent]()
-        self._registered[key] = q
-        try:
-            yield q
-        finally:
-            del self._registered[key]
+        pass
 
     @_public
     async def wait_kevent(
@@ -158,13 +128,7 @@ class KqueueIOManager:
             )
         self._registered[key] = _core.current_task()
 
-        def abort(raise_cancel: RaiseCancelT) -> Abort:
-            r = abort_func(raise_cancel)
-            if r is _core.Abort.SUCCEEDED:  # TODO: test this branch
-                del self._registered[key]
-            return r
 
-        # wait_task_rescheduled does not have its return type typed
         return await _core.wait_task_rescheduled(abort)  # type: ignore[no-any-return]
 
     async def _wait_common(
@@ -178,27 +142,6 @@ class KqueueIOManager:
         event = select.kevent(fd, filter, flags)
         self._kqueue.control([event], 0)
 
-        def abort(_: RaiseCancelT) -> Abort:
-            event = select.kevent(fd, filter, select.KQ_EV_DELETE)
-            try:
-                self._kqueue.control([event], 0)
-            except OSError as exc:
-                # kqueue tracks individual fds (*not* the underlying file
-                # object, see _io_epoll.py for a long discussion of why this
-                # distinction matters), and automatically deregisters an event
-                # if the fd is closed. So if kqueue.control says that it
-                # doesn't know about this event, then probably it's because
-                # the fd was closed behind our backs. (Too bad we can't ask it
-                # to wake us up when this happens, versus discovering it after
-                # the fact... oh well, you can't have everything.)
-                #
-                # FreeBSD reports this using EBADF. macOS uses ENOENT.
-                if exc.errno in (errno.EBADF, errno.ENOENT):  # pragma: no branch
-                    pass
-                else:  # pragma: no cover
-                    # As far as we know, this branch can't happen.
-                    raise
-            return _core.Abort.SUCCEEDED
 
         await self.wait_kevent(fd, filter, abort)
 
@@ -285,8 +228,6 @@ class KqueueIOManager:
                 _core.reschedule(receiver, outcome.Error(exc))
                 del self._registered[key]
             else:
-                # XX this is an interesting example of a case where being able
-                # to close a queue would be useful...
                 raise NotImplementedError(
                     "can't close an fd that monitor_kevent is using",
                 )

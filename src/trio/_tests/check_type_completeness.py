@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""This is a file that wraps calls to `pyright --verifytypes`, achieving two things:
-1. give an error if docstrings are missing.
-    pyright will give a number of missing docstrings, and error messages, but not exit with a non-zero value.
-2. filter out specific errors we don't care about.
-    this is largely due to 1, but also because Trio does some very complex stuff and --verifytypes has few to no ways of ignoring specific errors.
-
-If this check is giving you false alarms, you can ignore them by adding logic to `has_docstring_at_runtime`, in the main loop in `check_type`, or by updating the json file.
-"""
 
 from __future__ import annotations
 
-# this file is not run as part of the tests, instead it's run standalone from check.sh
 import argparse
 import json
 import subprocess
@@ -20,18 +11,13 @@ from pathlib import Path
 import trio
 import trio.testing
 
-# not needed if everything is working, but if somebody does something to generate
-# tons of errors, we can be nice and stop them from getting 3*tons of output
 printed_diagnostics: set[str] = set()
 
 
-# TODO: consider checking manually without `--ignoreexternal`, and/or
-# removing it from the below call later on.
 def run_pyright(platform: str) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
         [
             "pyright",
-            # Specify a platform and version to keep imported modules consistent.
             f"--pythonplatform={platform}",
             "--pythonversion=3.10",
             "--verifytypes=trio",
@@ -48,36 +34,23 @@ def has_docstring_at_runtime(name: str) -> bool:
     can resolve it, in order to check whether it has a `__doc__` at runtime and
     verifytypes misses it because we're doing overly fancy stuff.
     """
-    # This assert is solely for stopping isort from removing our imports of trio & trio.testing
-    # It could also be done with isort:skip, but that'd also disable import sorting and the like.
     assert trio.testing is not None
 
-    # figure out what part of the name is the module, so we can "import" it
     name_parts = name.split(".")
     assert name_parts[0] == "trio"
     if name_parts[1] == "tests":
         return True
 
-    # traverse down the remaining identifiers with getattr
     obj = trio
     try:
         for obj_name in name_parts[1:]:
             obj = getattr(obj, obj_name)
     except AttributeError as exc:
-        # asynciowrapper does funky getattr stuff
         if "AsyncIOWrapper" in str(exc) or name in (
-            # Symbols not existing on all platforms, so we can't dynamically inspect them.
-            # Manually confirmed to have docstrings but pyright doesn't see them due to
-            # export shenanigans. TODO: actually manually confirm that.
-            # In theory we could verify these at runtime, probably by running the script separately
-            # on separate platforms. It might also be a decent idea to work the other way around,
-            # a la test_static_tool_sees_class_members
-            # darwin
             "trio.lowlevel.current_kqueue",
             "trio.lowlevel.monitor_kevent",
             "trio.lowlevel.wait_kevent",
             "trio._core._io_kqueue._KqueueStatistics",
-            # windows
             "trio._socket.SocketType.share",
             "trio._core._io_windows._WindowsStatistics",
             "trio._core._windows_cffi.Handle",
@@ -89,11 +62,6 @@ def has_docstring_at_runtime(name: str) -> bool:
             "trio.lowlevel.write_overlapped",
             "trio.lowlevel.WaitForSingleObject",
             "trio.socket.fromshare",
-            # linux
-            # this test will fail on linux, but I don't develop on linux. So the next
-            # person to do so is very welcome to open a pull request and populate with
-            # objects
-            # TODO: these are erroring on all platforms, why?
             "trio._highlevel_generic.StapledStream.send_stream",
             "trio._highlevel_generic.StapledStream.receive_stream",
             "trio._ssl.SSLStream.transport_stream",
@@ -116,10 +84,8 @@ def check_type(
     full_diagnostics_file: Path | None,
     expected_errors: list[object],
 ) -> list[object]:
-    # convince isort we use the trio import
     assert trio is not None
 
-    # run pyright, load output into json
     res = run_pyright(platform)
     current_result = json.loads(res.stdout)
 
@@ -151,13 +117,10 @@ def check_type(
                 ):
                     continue
 
-            # ignore errors about missing docstrings if they're available at runtime
             if message.startswith("No docstring found for"):
                 if has_docstring_at_runtime(symbol["name"]):
                     continue
             else:
-                # Missing docstring messages include the name of the object.
-                # Other errors don't, so we add it.
                 message = f"{name}: {message}"
             if message not in expected_errors and message not in printed_diagnostics:
                 print(f"new error: {message}", file=sys.stderr)
@@ -209,8 +172,6 @@ def main(args: argparse.Namespace) -> int:
         errors_by_platform[platform] = errors
     print("*" * 20)
 
-    # cut down the size of the json file by a lot, and make it easier to parse for
-    # humans, by moving errors that appear on all platforms to a separate category
     errors_by_platform["all"] = []
     for e in errors_by_platform["Linux"].copy():
         if e in errors_by_platform["Darwin"] and e in errors_by_platform["Windows"]:
@@ -221,10 +182,8 @@ def main(args: argparse.Namespace) -> int:
     if changed and args.overwrite_file:
         with open(errors_by_platform_file, "w") as f:
             json.dump(errors_by_platform, f, indent=4, sort_keys=True)
-            # newline at end of file
             f.write("\n")
 
-    # True -> 1 -> non-zero exit value -> error
     return changed
 
 

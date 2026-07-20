@@ -11,9 +11,6 @@ if TYPE_CHECKING:
 
 from ._generated_windows_ffi import ffi
 
-################################################################
-# Functions and types
-################################################################
 
 if not TYPE_CHECKING:
     CData: TypeAlias = ffi.CData
@@ -25,7 +22,6 @@ HandleArray = NewType("HandleArray", CData)
 
 
 class _Kernel32(Protocol):
-    """Statically typed version of the kernel32.dll functions we use."""
 
     def CreateIoCompletionPort(
         self,
@@ -71,7 +67,6 @@ class _Kernel32(Protocol):
     def WriteFile(
         self,
         hFile: Handle,
-        # not sure about this type
         lpBuffer: CData,
         nNumberOfBytesToWrite: int,
         lpNumberOfBytesWritten: AlwaysNull,
@@ -82,7 +77,6 @@ class _Kernel32(Protocol):
     def ReadFile(
         self,
         hFile: Handle,
-        # not sure about this type
         lpBuffer: CData,
         nNumberOfBytesToRead: int,
         lpNumberOfBytesRead: AlwaysNull,
@@ -132,10 +126,8 @@ class _Kernel32(Protocol):
         self,
         hDevice: Handle,
         dwIoControlCode: int,
-        # this is wrong (it's not always null)
         lpInBuffer: AlwaysNull,
         nInBufferSize: int,
-        # this is also wrong
         lpOutBuffer: AlwaysNull,
         nOutBufferSize: int,
         lpBytesReturned: AlwaysNull,
@@ -145,13 +137,11 @@ class _Kernel32(Protocol):
 
 
 class _Nt(Protocol):
-    """Statically typed version of the dtdll.dll functions we use."""
 
     def RtlNtStatusToDosError(self, status: int, /) -> ErrorCodes: ...
 
 
 class _Ws2(Protocol):
-    """Statically typed version of the ws2_32.dll functions we use."""
 
     def WSAGetLastError(self) -> int: ...
 
@@ -165,7 +155,6 @@ class _Ws2(Protocol):
         cbOutBuffer: int,
         lpcbBytesReturned: CData,  # int*
         lpOverlapped: AlwaysNull,
-        # actually LPWSAOVERLAPPED_COMPLETION_ROUTINE
         lpCompletionRoutine: AlwaysNull,
         /,
     ) -> int: ...
@@ -192,13 +181,7 @@ kernel32 = cast("_Kernel32", ffi.dlopen("kernel32.dll"))
 ntdll = cast("_Nt", ffi.dlopen("ntdll.dll"))
 ws2_32 = cast("_Ws2", ffi.dlopen("ws2_32.dll"))
 
-################################################################
-# Magic numbers
-################################################################
 
-# Here's a great resource for looking these up:
-#   https://www.magnumdb.com
-# (Tip: check the box to see "Hex value")
 
 INVALID_HANDLE_VALUE = Handle(ffi.cast("HANDLE", -1))
 
@@ -233,9 +216,6 @@ class FileFlags(enum.IntFlag):
 
 
 class AFDPollFlags(enum.IntFlag):
-    # These are drawn from a combination of:
-    #   https://github.com/piscisaureus/wepoll/blob/master/src/afd.h
-    #   https://github.com/reactos/reactos/blob/master/sdk/include/reactos/drivers/afd/shared.h
     AFD_POLL_RECEIVE = 0x0001
     AFD_POLL_RECEIVE_EXPEDITED = 0x0002  # OOB/urgent data
     AFD_POLL_SEND = 0x0004
@@ -245,7 +225,6 @@ class AFDPollFlags(enum.IntFlag):
     AFD_POLL_CONNECT = 0x0040  # socket is successfully connected
     AFD_POLL_ACCEPT = 0x0080  # you can call accept on this socket
     AFD_POLL_CONNECT_FAIL = 0x0100  # connect() terminated unsuccessfully
-    # See WSAEventSelect docs for more details on these four:
     AFD_POLL_QOS = 0x0200
     AFD_POLL_GROUP_QOS = 0x0400
     AFD_POLL_ROUTING_INTERFACE_CHANGE = 0x0800
@@ -267,26 +246,16 @@ class IoControlCodes(enum.IntEnum):
     IOCTL_AFD_POLL = 0x00012024
 
 
-################################################################
-# Generic helpers
-################################################################
 
 
 def _handle(obj: int | CData) -> Handle:
-    # For now, represent handles as either cffi HANDLEs or as ints.  If you
-    # try to pass in a file descriptor instead, it's not going to work
-    # out. (For that msvcrt.get_osfhandle does the trick, but I don't know if
-    # we'll actually need that for anything...) For sockets this doesn't
-    # matter, Python never allocates an fd. So let's wait until we actually
-    # encounter the problem before worrying about it.
     if isinstance(obj, int):
         return Handle(ffi.cast("HANDLE", obj))
     return Handle(obj)
 
 
 def handle_array(count: int) -> HandleArray:
-    """Make an array of handles."""
-    return HandleArray(ffi.new(f"HANDLE[{count}]"))
+    pass
 
 
 def raise_winerror(
@@ -295,9 +264,6 @@ def raise_winerror(
     filename: str | None = None,
     filename2: str | None = None,
 ) -> NoReturn:
-    # assert sys.platform == "win32"  # TODO: make this work in MyPy
-    # ... in the meanwhile, ffi.getwinerror() is undefined on non-Windows, necessitating the type
-    # ignores.
 
     if winerror is None:
         err = ffi.getwinerror()  # type: ignore[attr-defined,unused-ignore]
@@ -309,5 +275,4 @@ def raise_winerror(
         if err is None:
             raise RuntimeError("No error set?")
         _, msg = err
-    # https://docs.python.org/3/library/exceptions.html#OSError
     raise OSError(0, msg, filename, winerror, filename2)

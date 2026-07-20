@@ -11,13 +11,11 @@ if TYPE_CHECKING:
 
     from typing_extensions import Self
 
-    # both of these introduce circular imports if outside a TYPE_CHECKING guard
     from ._socket import SocketType
     from .lowlevel import Task
 
 
 class Clock(ABC):
-    """The interface for custom run loop clocks."""
 
     __slots__ = ()
 
@@ -67,61 +65,26 @@ class Clock(ABC):
 
 
 class Instrument(ABC):  # noqa: B024  # conceptually is ABC
-    """The interface for run loop instrumentation.
-
-    Instruments don't have to inherit from this abstract base class, and all
-    of these methods are optional. This class serves mostly as documentation.
-
-    """
 
     __slots__ = ()
 
     def before_run(self) -> None:
-        """Called at the beginning of :func:`trio.run`."""
-        return
+        pass
 
     def after_run(self) -> None:
-        """Called just before :func:`trio.run` returns."""
-        return
+        pass
 
     def task_spawned(self, task: Task) -> None:
-        """Called when the given task is created.
-
-        Args:
-            task (trio.lowlevel.Task): The new task.
-
-        """
-        return
+        pass
 
     def task_scheduled(self, task: Task) -> None:
-        """Called when the given task becomes runnable.
-
-        It may still be some time before it actually runs, if there are other
-        runnable tasks ahead of it.
-
-        Args:
-            task (trio.lowlevel.Task): The task that became runnable.
-
-        """
-        return
+        pass
 
     def before_task_step(self, task: Task) -> None:
-        """Called immediately before we resume running the given task.
-
-        Args:
-            task (trio.lowlevel.Task): The task that is about to run.
-
-        """
-        return
+        pass
 
     def after_task_step(self, task: Task) -> None:
-        """Called when we return to the main run loop after a task has yielded.
-
-        Args:
-            task (trio.lowlevel.Task): The task that just ran.
-
-        """
-        return
+        pass
 
     def task_exited(self, task: Task) -> None:
         """Called when the given task exits.
@@ -133,33 +96,13 @@ class Instrument(ABC):  # noqa: B024  # conceptually is ABC
         return
 
     def before_io_wait(self, timeout: float) -> None:
-        """Called before blocking to wait for I/O readiness.
-
-        Args:
-            timeout (float): The number of seconds we are willing to wait.
-
-        """
-        return
+        pass
 
     def after_io_wait(self, timeout: float) -> None:
-        """Called after handling pending I/O.
-
-        Args:
-            timeout (float): The number of seconds we were willing to
-                wait. This much time may or may not have elapsed, depending on
-                whether any I/O was ready.
-
-        """
-        return
+        pass
 
 
 class HostnameResolver(ABC):
-    """If you have a custom hostname resolver, then implementing
-    :class:`HostnameResolver` allows you to register this to be used by Trio.
-
-    See :func:`trio.socket.set_custom_hostname_resolver`.
-
-    """
 
     __slots__ = ()
 
@@ -208,12 +151,6 @@ class HostnameResolver(ABC):
 
 
 class SocketFactory(ABC):
-    """If you write a custom class implementing the Trio socket interface,
-    then you can use a :class:`SocketFactory` to get Trio to use it.
-
-    See :func:`trio.socket.set_custom_socket_factory`.
-
-    """
 
     __slots__ = ()
 
@@ -241,30 +178,6 @@ class SocketFactory(ABC):
 
 
 class AsyncResource(ABC):
-    """A standard interface for resources that needs to be cleaned up, and
-    where that cleanup may require blocking operations.
-
-    This class distinguishes between "graceful" closes, which may perform I/O
-    and thus block, and a "forceful" close, which cannot. For example, cleanly
-    shutting down a TLS-encrypted connection requires sending a "goodbye"
-    message; but if a peer has become non-responsive, then sending this
-    message might block forever, so we may want to just drop the connection
-    instead. Therefore the :meth:`aclose` method is unusual in that it
-    should always close the connection (or at least make its best attempt)
-    *even if it fails*; failure indicates a failure to achieve grace, not a
-    failure to close the connection.
-
-    Objects that implement this interface can be used as async context
-    managers, i.e., you can write::
-
-      async with create_resource() as some_async_resource:
-          ...
-
-    Entering the context manager is synchronous (not a checkpoint); exiting it
-    calls :meth:`aclose`. The default implementations of
-    ``__aenter__`` and ``__aexit__`` should be adequate for all subclasses.
-
-    """
 
     __slots__ = ()
 
@@ -310,20 +223,6 @@ class AsyncResource(ABC):
 
 
 class SendStream(AsyncResource):
-    """A standard interface for sending data on a byte stream.
-
-    The underlying stream may be unidirectional, or bidirectional. If it's
-    bidirectional, then you probably want to also implement
-    :class:`ReceiveStream`, which makes your object a :class:`Stream`.
-
-    :class:`SendStream` objects also implement the :class:`AsyncResource`
-    interface, so they can be closed by calling :meth:`~AsyncResource.aclose`
-    or using an ``async with`` block.
-
-    If you want to send Python objects rather than raw bytes, see
-    :class:`SendChannel`.
-
-    """
 
     __slots__ = ()
 
@@ -411,25 +310,6 @@ class SendStream(AsyncResource):
 
 
 class ReceiveStream(AsyncResource):
-    """A standard interface for receiving data on a byte stream.
-
-    The underlying stream may be unidirectional, or bidirectional. If it's
-    bidirectional, then you probably want to also implement
-    :class:`SendStream`, which makes your object a :class:`Stream`.
-
-    :class:`ReceiveStream` objects also implement the :class:`AsyncResource`
-    interface, so they can be closed by calling :meth:`~AsyncResource.aclose`
-    or using an ``async with`` block.
-
-    If you want to receive Python objects rather than raw bytes, see
-    :class:`ReceiveChannel`.
-
-    `ReceiveStream` objects can be used in ``async for`` loops. Each iteration
-    will produce an arbitrary sized chunk of bytes, like calling
-    `receive_some` with no arguments. Every chunk will contain at least one
-    byte, and the loop automatically exits when reaching end-of-file.
-
-    """
 
     __slots__ = ()
 
@@ -473,24 +353,11 @@ class ReceiveStream(AsyncResource):
 
 
 class Stream(SendStream, ReceiveStream):
-    """A standard interface for interacting with bidirectional byte streams.
-
-    A :class:`Stream` is an object that implements both the
-    :class:`SendStream` and :class:`ReceiveStream` interfaces.
-
-    If implementing this interface, you should consider whether you can go one
-    step further and implement :class:`HalfCloseableStream`.
-
-    """
 
     __slots__ = ()
 
 
 class HalfCloseableStream(Stream):
-    """This interface extends :class:`Stream` to also allow closing the send
-    part of the stream without closing the receive part.
-
-    """
 
     __slots__ = ()
 
@@ -544,32 +411,16 @@ class HalfCloseableStream(Stream):
         """
 
 
-# A regular invariant generic type
 T = TypeVar("T")
 
-# The type of object produced by a ReceiveChannel (covariant because
-# ReceiveChannel[Derived] can be passed to someone expecting
-# ReceiveChannel[Base])
 ReceiveType = TypeVar("ReceiveType", covariant=True)
 
-# The type of object accepted by a SendChannel (contravariant because
-# SendChannel[Base] can be passed to someone expecting
-# SendChannel[Derived])
 SendType = TypeVar("SendType", contravariant=True)
 
-# The type of object produced by a Listener (covariant plus must be
-# an AsyncResource)
 T_resource = TypeVar("T_resource", bound=AsyncResource, covariant=True)
 
 
 class Listener(AsyncResource, Generic[T_resource]):
-    """A standard interface for listening for incoming connections.
-
-    :class:`Listener` objects also implement the :class:`AsyncResource`
-    interface, so they can be closed by calling :meth:`~AsyncResource.aclose`
-    or using an ``async with`` block.
-
-    """
 
     __slots__ = ()
 
@@ -602,16 +453,6 @@ class Listener(AsyncResource, Generic[T_resource]):
 
 
 class SendChannel(AsyncResource, Generic[SendType]):
-    """A standard interface for sending Python objects to some receiver.
-
-    `SendChannel` objects also implement the `AsyncResource` interface, so
-    they can be closed by calling `~AsyncResource.aclose` or using an ``async
-    with`` block.
-
-    If you want to send raw bytes rather than Python objects, see
-    `SendStream`.
-
-    """
 
     __slots__ = ()
 
@@ -638,25 +479,6 @@ class SendChannel(AsyncResource, Generic[SendType]):
 
 
 class ReceiveChannel(AsyncResource, Generic[ReceiveType]):
-    """A standard interface for receiving Python objects from some sender.
-
-    You can iterate over a :class:`ReceiveChannel` using an ``async for``
-    loop::
-
-       async for value in receive_channel:
-           ...
-
-    This is equivalent to calling :meth:`receive` repeatedly. The loop exits
-    without error when `receive` raises `~trio.EndOfChannel`.
-
-    `ReceiveChannel` objects also implement the `AsyncResource` interface, so
-    they can be closed by calling `~AsyncResource.aclose` or using an ``async
-    with`` block.
-
-    If you want to receive raw bytes rather than Python objects, see
-    `ReceiveStream`.
-
-    """
 
     __slots__ = ()
 
@@ -691,24 +513,14 @@ class ReceiveChannel(AsyncResource, Generic[ReceiveType]):
             raise StopAsyncIteration from None
 
 
-# these are necessary for Sphinx's :show-inheritance: with type args.
-# (this should be removed if possible)
-# see: https://github.com/python/cpython/issues/123250
 SendChannel.__module__ = SendChannel.__module__.replace("_abc", "abc")
 ReceiveChannel.__module__ = ReceiveChannel.__module__.replace("_abc", "abc")
 Listener.__module__ = Listener.__module__.replace("_abc", "abc")
 
 
 class Channel(SendChannel[T], ReceiveChannel[T]):
-    """A standard interface for interacting with bidirectional channels.
-
-    A `Channel` is an object that implements both the `SendChannel` and
-    `ReceiveChannel` interfaces, so you can both send and receive objects.
-
-    """
 
     __slots__ = ()
 
 
-# see above
 Channel.__module__ = Channel.__module__.replace("_abc", "abc")

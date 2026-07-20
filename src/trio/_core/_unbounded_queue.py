@@ -16,15 +16,6 @@ if TYPE_CHECKING:
 
 @attrs.frozen
 class UnboundedQueueStatistics:
-    """An object containing debugging information.
-
-    Currently, the following fields are defined:
-
-    * ``qsize``: The number of items currently in the queue.
-    * ``tasks_waiting``: The number of tasks blocked on this queue's
-      :meth:`get_batch` method.
-
-    """
 
     qsize: int
     tasks_waiting: int
@@ -32,34 +23,6 @@ class UnboundedQueueStatistics:
 
 @final
 class UnboundedQueue(Generic[T]):
-    """An unbounded queue suitable for certain unusual forms of inter-task
-    communication.
-
-    This class is designed for use as a queue in cases where the producer for
-    some reason cannot be subjected to back-pressure, i.e., :meth:`put_nowait`
-    has to always succeed. In order to prevent the queue backlog from actually
-    growing without bound, the consumer API is modified to dequeue items in
-    "batches". If a consumer task processes each batch without yielding, then
-    this helps achieve (but does not guarantee) an effective bound on the
-    queue's memory use, at the cost of potentially increasing system latencies
-    in general. You should generally prefer to use a memory channel
-    instead if you can.
-
-    Currently each batch completely empties the queue, but `this may change in
-    the future <https://github.com/python-trio/trio/issues/51>`__.
-
-    A :class:`UnboundedQueue` object can be used as an asynchronous iterator,
-    where each iteration returns a new batch of items. I.e., these two loops
-    are equivalent::
-
-       async for batch in queue:
-           ...
-
-       while True:
-           obj = await queue.get_batch()
-           ...
-
-    """
 
     @deprecated(
         "0.9.0",
@@ -71,24 +34,16 @@ class UnboundedQueue(Generic[T]):
     def __init__(self) -> None:
         self._lot = _core.ParkingLot()
         self._data: list[T] = []
-        # used to allow handoff from put to the first task in the lot
         self._can_get = False
 
     def __repr__(self) -> str:
         return f"<UnboundedQueue holding {len(self._data)} items>"
 
     def qsize(self) -> int:
-        """Returns the number of items currently in the queue."""
-        return len(self._data)
+        pass
 
     def empty(self) -> bool:
-        """Returns True if the queue is empty, False otherwise.
-
-        There is some subtlety to interpreting this method's return value: see
-        `issue #63 <https://github.com/python-trio/trio/issues/63>`__.
-
-        """
-        return not self._data
+        pass
 
     @_core.enable_ki_protection
     def put_nowait(self, obj: T) -> None:
@@ -116,20 +71,7 @@ class UnboundedQueue(Generic[T]):
         return data
 
     def get_batch_nowait(self) -> list[T]:
-        """Attempt to get the next batch from the queue, without blocking.
-
-        Returns:
-          list: A list of dequeued items, in order. On a successful call this
-              list is always non-empty; if it would be empty we raise
-              :exc:`~trio.WouldBlock` instead.
-
-        Raises:
-          ~trio.WouldBlock: if the queue is empty.
-
-        """
-        if not self._can_get:
-            raise _core.WouldBlock
-        return self._get_batch_protected()
+        pass
 
     async def get_batch(self) -> list[T]:
         """Get the next batch from the queue, blocking as necessary.

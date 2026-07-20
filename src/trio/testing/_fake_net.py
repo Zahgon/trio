@@ -1,10 +1,4 @@
-# This should eventually be cleaned up and become public, but for right now I'm just
-# implementing enough to test DTLS.
 
-# TODO:
-# - user-defined routers
-# - TCP
-# - UDP broadcast
 
 from __future__ import annotations
 
@@ -50,13 +44,6 @@ def _wildcard_ip_for(family: int) -> IPAddress:
     raise NotImplementedError("Unhandled ip address family")  # pragma: no cover
 
 
-# not used anywhere
-def _localhost_ip_for(family: int) -> IPAddress:  # pragma: no cover
-    if family == trio.socket.AF_INET:
-        return ipaddress.ip_address("127.0.0.1")
-    elif family == trio.socket.AF_INET6:
-        return ipaddress.ip_address("::1")
-    raise NotImplementedError("Unhandled ip address family")
 
 
 def _fake_err(code: int) -> NoReturn:
@@ -101,7 +88,6 @@ class UDPEndpoint:
 @attrs.frozen
 class UDPBinding:
     local: UDPEndpoint
-    # remote: UDPEndpoint # ??
 
 
 @attrs.frozen
@@ -110,13 +96,6 @@ class UDPPacket:
     destination: UDPEndpoint
     payload: bytes = attrs.field(repr=lambda p: p.hex())
 
-    # not used/tested anywhere
-    def reply(self, payload: bytes) -> UDPPacket:  # pragma: no cover
-        return UDPPacket(
-            source=self.destination,
-            destination=self.source,
-            payload=payload,
-        )
 
 
 @attrs.frozen
@@ -161,7 +140,6 @@ class FakeHostnameResolver(trio.abc.HostnameResolver):
 @final
 class FakeNet:
     def __init__(self) -> None:
-        # When we need to pick an arbitrary unique ip address/port, use these:
         self._auto_ipv4_iter = ipaddress.IPv4Network("1.0.0.0/8").hosts()  # untested
         self._auto_ipv6_iter = ipaddress.IPv6Network("1::/16").hosts()  # untested
         self._auto_port_iter = iter(range(50000, 65535))
@@ -190,7 +168,6 @@ class FakeNet:
         if binding in self._bound:
             self._bound[binding]._deliver_packet(packet)
         else:
-            # No valid destination, so drop it
             pass
 
 
@@ -225,20 +202,10 @@ class FakeSocket(trio.socket.SocketType, metaclass=NoPublicConstructor):
             UDPPacket
         ](float("inf"))
 
-        # This is the source-of-truth for what port etc. this socket is bound to
         self._binding: UDPBinding | None = None
 
-    @property
-    def type(self) -> SocketKind:
-        return self._type
 
-    @property
-    def family(self) -> AddressFamily:
-        return self._family
 
-    @property
-    def proto(self) -> int:
-        return self._proto
 
     def _check_closed(self) -> None:
         if self._closed:
@@ -268,13 +235,9 @@ class FakeSocket(trio.socket.SocketType, metaclass=NoPublicConstructor):
         )
 
     def _deliver_packet(self, packet: UDPPacket) -> None:
-        # sending to a closed socket -- UDP packets get dropped
         with contextlib.suppress(trio.BrokenResourceError):
             self._packet_sender.send_nowait(packet)
 
-    ################################################################
-    # Actual IO operation implementations
-    ################################################################
 
     async def bind(self, addr: object) -> None:
         self._check_closed()
@@ -286,7 +249,6 @@ class FakeSocket(trio.socket.SocketType, metaclass=NoPublicConstructor):
 
         ip = ipaddress.ip_address(ip_str)
         assert _family_for(ip) == self.family
-        # We convert binds to INET_ANY into binds to localhost
         if ip == ipaddress.ip_address("0.0.0.0"):
             ip = ipaddress.ip_address("127.0.0.1")
         elif ip == ipaddress.ip_address("::"):
@@ -360,8 +322,6 @@ class FakeSocket(trio.socket.SocketType, metaclass=NoPublicConstructor):
         if flags != 0:
             raise NotImplementedError("FakeNet doesn't support any recv flags")
         if self._binding is None:
-            # I messed this up a few times when writing tests ... but it also never happens
-            # in any of the existing tests, so maybe it could be intentional...
             raise NotImplementedError(
                 "The code will most likely hang if you try to receive on a fakesocket "
                 "without a binding. If that is not the case, or you explicitly want to "
@@ -385,9 +345,6 @@ class FakeSocket(trio.socket.SocketType, metaclass=NoPublicConstructor):
     ):
         recvmsg_into = _recvmsg_into
 
-    ################################################################
-    # Simple state query stuff
-    ################################################################
 
     def getsockname(self) -> tuple[str, int] | tuple[str, int, int, int]:
         self._check_closed()
@@ -399,21 +356,6 @@ class FakeSocket(trio.socket.SocketType, metaclass=NoPublicConstructor):
             assert self.family == trio.socket.AF_INET6
             return ("::", 0)
 
-    # TODO: This method is not tested, and seems to make incorrect assumptions. It should maybe raise NotImplementedError.
-    def getpeername(self) -> tuple[str, int] | tuple[str, int, int, int]:
-        self._check_closed()
-        if self._binding is not None:
-            assert hasattr(
-                self._binding,
-                "remote",
-            ), "This method seems to assume that self._binding has a remote UDPEndpoint"
-            if self._binding.remote is not None:  # pragma: no cover
-                assert isinstance(
-                    self._binding.remote,
-                    UDPEndpoint,
-                ), "Self._binding.remote should be a UDPEndpoint"
-                return self._binding.remote.as_python_sockaddr()
-        _fake_err(errno.ENOTCONN)
 
     @overload
     def getsockopt(self, /, level: int, optname: int) -> int: ...
@@ -462,9 +404,6 @@ class FakeSocket(trio.socket.SocketType, metaclass=NoPublicConstructor):
 
         raise OSError(f"FakeNet doesn't implement setsockopt({level}, {optname}, ...)")
 
-    ################################################################
-    # Various boilerplate and trivial stubs
-    ################################################################
 
     def __enter__(self) -> Self:
         return self
@@ -480,7 +419,6 @@ class FakeSocket(trio.socket.SocketType, metaclass=NoPublicConstructor):
     async def send(self, data: Buffer, flags: int = 0) -> int:
         return await self.sendto(data, flags, None)
 
-    # __ prefixed arguments because typeshed uses that and typechecker issues
     @overload
     async def sendto(
         self,
@@ -488,7 +426,6 @@ class FakeSocket(trio.socket.SocketType, metaclass=NoPublicConstructor):
         __address: tuple[object, ...] | str | Buffer,
     ) -> int: ...
 
-    # __ prefixed arguments because typeshed uses that and typechecker issues
     @overload
     async def sendto(
         self,
@@ -517,9 +454,6 @@ class FakeSocket(trio.socket.SocketType, metaclass=NoPublicConstructor):
         data, _address = await self.recvfrom(bufsize, flags)
         return data
 
-    async def recv_into(self, buf: Buffer, nbytes: int = 0, flags: int = 0) -> int:
-        got_bytes, _address = await self.recvfrom_into(buf, nbytes, flags)
-        return got_bytes
 
     async def recvfrom(
         self,
@@ -529,20 +463,6 @@ class FakeSocket(trio.socket.SocketType, metaclass=NoPublicConstructor):
         data, _ancdata, _msg_flags, address = await self._recvmsg(bufsize, flags)
         return data, address
 
-    async def recvfrom_into(
-        self,
-        buf: Buffer,
-        nbytes: int = 0,
-        flags: int = 0,
-    ) -> tuple[int, AddressFormat]:
-        if nbytes != 0 and nbytes != memoryview(buf).nbytes:
-            raise NotImplementedError("partial recvfrom_into")
-        got_nbytes, _ancdata, _msg_flags, address = await self._recvmsg_into(
-            [buf],
-            0,
-            flags,
-        )
-        return got_nbytes, address
 
     async def _recvmsg(
         self,
@@ -569,12 +489,7 @@ class FakeSocket(trio.socket.SocketType, metaclass=NoPublicConstructor):
     def detach(self) -> int:
         raise NotImplementedError("can't detach() a FakeNet socket")
 
-    def get_inheritable(self) -> bool:
-        return False
 
-    def set_inheritable(self, inheritable: bool) -> None:
-        if inheritable:
-            raise NotImplementedError("FakeNet can't make inheritable sockets")
 
     if sys.platform == "win32" or (
         not TYPE_CHECKING and hasattr(socket.socket, "share")
